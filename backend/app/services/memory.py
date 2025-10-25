@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import AsyncIterator, List, Optional
+from typing import AsyncIterator, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from neo4j import AsyncGraphDatabase
@@ -22,6 +23,7 @@ class MemoryRecord:
     role: str
     content: str
     timestamp: datetime
+    expires_at: Optional[datetime] = None
 
 
 class GraphMemoryService:
@@ -41,6 +43,22 @@ class GraphMemoryService:
         self._ttl_minutes = short_term_ttl_minutes
         self._driver = AsyncGraphDatabase.driver(uri, auth=(user, password))
         self._fallback_records: list[MemoryRecord] = []
+
+    def _prune_fallback_records(self) -> None:
+        """Drop expired fallback short-term records to keep memory bounded."""
+
+        now = datetime.utcnow()
+        self._fallback_records = [
+            record
+            for record in self._fallback_records
+            if record.expires_at is None or record.expires_at >= now
+        ]
+
+    def _record_fallback(self, record: MemoryRecord) -> None:
+        """Store a fallback record after pruning expired entries."""
+
+        self._prune_fallback_records()
+        self._fallback_records.append(record)
 
     @asynccontextmanager
     async def session(self) -> AsyncIterator[AsyncSession]:
@@ -84,14 +102,16 @@ class GraphMemoryService:
         }
         try:
             async with self.session() as neo_session:
-                await neo_session.run(query, parameters)
+                result = await neo_session.run(query, parameters)
+                await result.consume()
         except Neo4jError:
-            self._fallback_records.append(
+            self._record_fallback(
                 MemoryRecord(
                     session_id=session_id,
                     role=message.role,
                     content=message.content,
                     timestamp=message.timestamp,
+                    expires_at=message.timestamp + self._ttl,
                 )
             )
 
@@ -104,6 +124,7 @@ class GraphMemoryService:
         RETURN m.role AS role, m.content AS content, m.timestamp AS timestamp
         ORDER BY timestamp ASC
         """
+        self._prune_fallback_records()
         try:
             async with self.session() as neo_session:
                 result = await neo_session.run(query, session_id=session_id)
@@ -119,14 +140,17 @@ class GraphMemoryService:
                             content=record["content"],
                             timestamp=timestamp,
                         )
-                    )
+                )
                 return records
         except Neo4jError:
-            return [
+            fallback_messages = [
                 ChatMessage(role=rec.role, content=rec.content, timestamp=rec.timestamp)
-                for rec in self._fallback_records
+                for rec in sorted(self._fallback_records, key=lambda r: r.timestamp)
                 if rec.session_id == session_id
+                and rec.role != "knowledge"
+                and (rec.expires_at is None or rec.expires_at >= datetime.utcnow())
             ]
+            return fallback_messages
 
     async def consolidate_long_term(self, session_id: str, summary: str, notes: Optional[str] = None) -> str:
         """Persist a long-term knowledge node derived from the session."""
@@ -150,16 +174,17 @@ class GraphMemoryService:
         """
         try:
             async with self.session() as neo_session:
-                await neo_session.run(
+                result = await neo_session.run(
                     query,
                     session_id=session_id,
                     knowledge_id=knowledge_id,
                     summary=summary,
                     notes=notes,
                 )
+                await result.consume()
         except Neo4jError:
             # fallback: just keep a memory record for display
-            self._fallback_records.append(
+            self._record_fallback(
                 MemoryRecord(
                     session_id=session_id,
                     role="knowledge",
@@ -182,16 +207,69 @@ class GraphMemoryService:
                 result = await neo_session.run(query)
                 record = await result.single()
         except Neo4jError:
-            nodes = [
-                GraphNode(
-                    id=str(index),
-                    label=rec.role,
-                    type="Fallback",
-                    metadata={"content": rec.content, "timestamp": rec.timestamp.isoformat()},
+            self._prune_fallback_records()
+            nodes: List[GraphNode] = []
+            edges: List[GraphEdge] = []
+            node_ids: Dict[int, str] = {}
+            sorted_records: List[Tuple[int, MemoryRecord]] = sorted(
+                enumerate(self._fallback_records), key=lambda item: item[1].timestamp
+            )
+            for index, record in sorted_records:
+                node_id = f"fallback-{index}"
+                node_ids[index] = node_id
+                node_type = "Knowledge" if record.role == "knowledge" else record.role
+                metadata = {
+                    "session_id": record.session_id,
+                    "timestamp": record.timestamp.isoformat(),
+                    "content": record.content,
+                }
+                if record.expires_at is not None:
+                    metadata["expires_at"] = record.expires_at.isoformat()
+                nodes.append(
+                    GraphNode(
+                        id=node_id,
+                        label=node_type,
+                        type=node_type,
+                        metadata=metadata,
+                    )
                 )
-                for index, rec in enumerate(self._fallback_records)
-            ]
-            return nodes, []
+
+            sessions: Dict[str, List[Tuple[int, MemoryRecord]]] = defaultdict(list)
+            for index, record in sorted_records:
+                sessions[record.session_id].append((index, record))
+
+            for session_id, records in sessions.items():
+                chronological = sorted(records, key=lambda item: item[1].timestamp)
+                previous_message_index: Optional[int] = None
+                knowledge_indices: List[int] = []
+                for index, record in chronological:
+                    if record.role == "knowledge":
+                        knowledge_indices.append(index)
+                        continue
+                    if previous_message_index is not None:
+                        edges.append(
+                            GraphEdge(
+                                source=node_ids[previous_message_index],
+                                target=node_ids[index],
+                                relation="FALLBACK_NEXT",
+                                metadata={"session_id": session_id},
+                            )
+                        )
+                    previous_message_index = index
+
+                if previous_message_index is None:
+                    continue
+                for knowledge_index in knowledge_indices:
+                    edges.append(
+                        GraphEdge(
+                            source=node_ids[previous_message_index],
+                            target=node_ids[knowledge_index],
+                            relation="FALLBACK_CONTRIBUTED",
+                            metadata={"session_id": session_id},
+                        )
+                    )
+
+            return nodes, edges
 
         nodes: List[GraphNode] = []
         edges: List[GraphEdge] = []
