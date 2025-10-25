@@ -29,6 +29,17 @@ Copy `.env.example` to `.env` and adjust values as needed:
 cp .env.example .env
 ```
 
+The sample configuration defaults `NEO4J_URI` to `bolt://neo4j:7687` so the
+backend connects directly to the single Neo4j instance without attempting
+routing-table discovery (which can trigger `Unable to retrieve routing
+information` errors). If you already have a `.env` with `neo4j://...`, the
+backend now normalizes it to the bolt equivalent automatically.
+
+> **Password reminder:** Neo4j 5+ rejects the default password `neo4j`.
+> The sample `.env` ships with `NEO4J_PASSWORD=neo4j_dev_password`; pick your
+> own secret but avoid `neo4j`, and keep the `NEO4J_AUTH` entry in
+> `docker-compose.yml` (or your deployment manifests) in sync.
+
 ### Ollama setup
 Run Ollama separately on the host machine and make sure the `gpt-oss-20b` model is available:
 ```bash
