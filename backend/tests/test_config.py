@@ -6,3 +6,4 @@ def test_settings_defaults() -> None:
     settings = Settings()
     assert settings.app_name == "graph-mem-chat-backend"
     assert settings.ollama_model == "gpt-oss-20b"
+    assert settings.ollama_base_url == "http://host.containers.internal:11434"
