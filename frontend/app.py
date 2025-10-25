@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 from typing import List
 
 import requests
@@ -39,7 +40,13 @@ def _load_graph() -> dict:
 
 
 def _render_graph(graph_data: dict) -> None:
-    network = Network(height="500px", width="100%", bgcolor="#ffffff", directed=True)
+    network = Network(
+        height="500px",
+        width="100%",
+        bgcolor="#ffffff",
+        directed=True,
+        cdn_resources="in_line",
+    )
     for node in graph_data.get("nodes", []):
         network.add_node(
             node["id"],
@@ -58,87 +65,178 @@ def _render_graph(graph_data: dict) -> None:
     st.components.v1.html(html, height=520)
 
 
+def _format_timestamp(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value
+    return parsed.strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def _normalize_messages(history_payload: List[dict]) -> List[dict]:
+    messages: List[dict] = []
+    for entry in history_payload:
+        messages.append(
+            {
+                "role": entry.get("role", ""),
+                "content": entry.get("content", ""),
+                "timestamp": _format_timestamp(entry.get("timestamp")),
+            }
+        )
+    return messages
+
+
 st.set_page_config(page_title="Graph Memory Chatbot", layout="wide")
 st.title("🧠 Graph Memory Chatbot")
 
 with st.sidebar:
     st.header("Session Controls")
-    session_id = st.text_input("Session ID", value=st.session_state.get("session_id", "demo"))
+    session_id = st.text_input(
+        "Session ID",
+        value=st.session_state.get("session_id", "demo"),
+        help="Use different IDs to separate conversations.",
+    )
     st.session_state["session_id"] = session_id
+    if st.button("Start Fresh Conversation", use_container_width=True):
+        st.session_state.messages = []
+        st.session_state.consolidate_feedback = None
+        st.session_state.graph_initialized = False
+        st.session_state.graph_data = {"nodes": [], "edges": []}
+        st.session_state.graph_error = None
+        st.session_state.graph_last_refreshed = None
+        st.rerun()
     st.markdown("Backend endpoint: `%s`" % BACKEND_URL)
 
-chat_container = st.container()
-input_col, action_col = st.columns([3, 1])
-
 def _refresh_graph() -> None:
-    graph_data = _load_graph()
-    st.session_state["graph_data"] = graph_data
+    try:
+        st.session_state.graph_data = _load_graph()
+        st.session_state.graph_error = None
+        st.session_state.graph_last_refreshed = datetime.utcnow()
+    except requests.RequestException as exc:
+        st.session_state.graph_error = str(exc)
 
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "graph_data" not in st.session_state:
     st.session_state.graph_data = {"nodes": [], "edges": []}
-if "graph_loaded" not in st.session_state:
-    try:
+if "graph_error" not in st.session_state:
+    st.session_state.graph_error = None
+if st.session_state.get("graph_initialized") is not True:
+    with st.spinner("Loading graph snapshot..."):
         _refresh_graph()
-    except requests.RequestException:
-        st.session_state.graph_data = {"nodes": [], "edges": []}
-    finally:
-        st.session_state.graph_loaded = True
+    st.session_state.graph_initialized = True
+if "consolidate_feedback" not in st.session_state:
+    st.session_state.consolidate_feedback = None
+if "graph_last_refreshed" not in st.session_state:
+    st.session_state.graph_last_refreshed = None
 
-with chat_container:
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.write(message["content"])
+if st.session_state.get("active_session") != session_id:
+    st.session_state.active_session = session_id
+    st.session_state.messages = []
+    st.session_state.consolidate_feedback = None
 
-with input_col:
-    user_input = st.chat_input("Send a message", key="chat_input")
+main_col, side_col = st.columns((3, 2), gap="large")
 
-with action_col:
-    st.markdown("### Actions")
-    consolidate_notes = st.text_area("Consolidation notes", height=120)
-    if st.button("Trigger Long-term Update", use_container_width=True):
+with main_col:
+    st.subheader("Conversation")
+    if st.session_state.messages:
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+                if message.get("timestamp"):
+                    st.caption(message["timestamp"])
+    else:
+        st.info("Start the conversation using the input below.")
+
+    st.divider()
+    st.subheader("Short-term Memory Snapshot")
+    history_container = st.container(border=True)
+    with history_container:
         try:
-            result = _trigger_consolidation(session_id, consolidate_notes or None)
-            st.success(f"Knowledge node created: {result['knowledge_id']}")
-            st.info(result["summary"])
-            _refresh_graph()
+            short_term_history = requests.get(
+                f"{BACKEND_URL}/memory/{session_id}", timeout=30
+            )
+            if short_term_history.ok:
+                history_payload = short_term_history.json()
+                normalized_history = _normalize_messages(history_payload)
+                if normalized_history:
+                    if not st.session_state.messages:
+                        st.session_state.messages = normalized_history
+                    for idx, item in enumerate(normalized_history):
+                        st.markdown(f"**{item['role'].title()}**")
+                        st.write(item["content"])
+                        if item.get("timestamp"):
+                            st.caption(item["timestamp"])
+                        if idx < len(normalized_history) - 1:
+                            st.markdown("---")
+                else:
+                    st.info("No short-term memory yet for this session.")
+            else:
+                st.warning("Could not load short-term history from the backend.")
         except requests.RequestException as exc:
-            st.error(f"Failed to consolidate: {exc}")
+            st.warning(f"History unavailable: {exc}")
+
+with side_col:
+    with st.container(border=True):
+        st.subheader("Memory Actions")
+        st.caption("Generate a long-term knowledge node from the latest chat history.")
+        consolidate_notes = st.text_area(
+            "Consolidation notes", height=120, key="consolidate_notes"
+        )
+        if st.button(
+            "Trigger Long-term Update", use_container_width=True, key="consolidate_btn"
+        ):
+            with st.spinner("Summarizing conversation..."):
+                try:
+                    result = _trigger_consolidation(session_id, consolidate_notes or None)
+                    st.session_state.consolidate_feedback = ("success", result)
+                    _refresh_graph()
+                except requests.RequestException as exc:
+                    st.session_state.consolidate_feedback = ("error", str(exc))
+
+        feedback = st.session_state.get("consolidate_feedback")
+        if feedback:
+            status, payload = feedback
+            if status == "success":
+                st.success(f"Knowledge node created: {payload['knowledge_id']}")
+                st.info(payload["summary"])
+            else:
+                st.error(f"Failed to consolidate: {payload}")
+
+    with st.container(border=True):
+        st.subheader("Knowledge Graph")
+        metrics_col1, metrics_col2 = st.columns(2)
+        metrics_col1.metric("Nodes", len(st.session_state.graph_data.get("nodes", [])))
+        metrics_col2.metric("Edges", len(st.session_state.graph_data.get("edges", [])))
+        if st.session_state.graph_last_refreshed:
+            st.caption(
+                f"Last refreshed: {_format_timestamp(st.session_state.graph_last_refreshed.isoformat())}"
+            )
+        if st.button(
+            "Refresh Graph View", use_container_width=True, key="refresh_graph_btn"
+        ):
+            with st.spinner("Refreshing graph..."):
+                _refresh_graph()
+
+        if st.session_state.graph_error:
+            st.warning(f"Graph unavailable: {st.session_state.graph_error}")
+        elif st.session_state.graph_data.get("nodes"):
+            _render_graph(st.session_state.graph_data)
+        else:
+            st.info("Graph will appear after interactions are stored.")
+
+user_input = st.chat_input("Send a message", key="chat_input")
 
 if user_input:
-    try:
-        response = _send_message(session_id, user_input)
-        st.session_state.messages = [
-            {"role": msg["role"], "content": msg["content"]}
-            for msg in response.get("short_term_snapshot", [])
-        ]
-        _refresh_graph()
-        st.rerun()
-    except requests.RequestException as exc:
-        st.error(f"Failed to send message: {exc}")
-
-st.subheader("Conversation State")
-try:
-    short_term_history = requests.get(f"{BACKEND_URL}/memory/{session_id}", timeout=30)
-    if short_term_history.ok:
-        messages: List[dict] = short_term_history.json()
-        st.json(messages)
-    else:
-        st.warning("Could not load short-term history")
-except requests.RequestException as exc:
-    st.warning(f"History unavailable: {exc}")
-
-st.subheader("Graph View")
-_refresh = st.button("Refresh Graph View")
-if _refresh or "graph_data" not in st.session_state:
-    try:
-        _refresh_graph()
-    except requests.RequestException as exc:
-        st.error(f"Failed to load graph: {exc}")
-
-if st.session_state.get("graph_data"):
-    _render_graph(st.session_state["graph_data"])
-else:
-    st.info("Graph will appear after interactions are stored.")
+    with st.spinner("Contacting assistant..."):
+        try:
+            response = _send_message(session_id, user_input)
+            normalized_messages = _normalize_messages(response.get("short_term_snapshot", []))
+            st.session_state.messages = normalized_messages
+            _refresh_graph()
+            st.rerun()
+        except requests.RequestException as exc:
+            st.error(f"Failed to send message: {exc}")

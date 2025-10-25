@@ -5,11 +5,13 @@ from contextlib import asynccontextmanager
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import AsyncIterator, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from neo4j import AsyncGraphDatabase
-from neo4j.async_ import AsyncSession
+
+if TYPE_CHECKING:  # pragma: no cover - imported for typing only
+    from neo4j import AsyncSession
 from neo4j.exceptions import Neo4jError
 
 from ..models.chat import ChatMessage, GraphEdge, GraphNode
@@ -41,7 +43,12 @@ class GraphMemoryService:
         self._password = password
         self._ttl = timedelta(minutes=short_term_ttl_minutes)
         self._ttl_minutes = short_term_ttl_minutes
-        self._driver = AsyncGraphDatabase.driver(uri, auth=(user, password))
+        self._driver_error: Optional[str] = None
+        try:
+            self._driver = AsyncGraphDatabase.driver(uri, auth=(user, password))
+        except Exception as exc:  # pragma: no cover - exercised in deployed envs
+            self._driver = None
+            self._driver_error = str(exc)
         self._fallback_records: list[MemoryRecord] = []
 
     def _prune_fallback_records(self) -> None:
@@ -61,9 +68,12 @@ class GraphMemoryService:
         self._fallback_records.append(record)
 
     @asynccontextmanager
-    async def session(self) -> AsyncIterator[AsyncSession]:
+    async def session(self) -> AsyncIterator["AsyncSession"]:
         """Context manager returning an async Neo4j session."""
 
+        if self._driver is None:
+            detail = f": {self._driver_error}" if self._driver_error else ""
+            raise RuntimeError(f"Neo4j driver is unavailable{detail}")
         async with self._driver.session() as session:
             yield session
 
@@ -104,7 +114,7 @@ class GraphMemoryService:
             async with self.session() as neo_session:
                 result = await neo_session.run(query, parameters)
                 await result.consume()
-        except Neo4jError:
+        except (Neo4jError, RuntimeError):
             self._record_fallback(
                 MemoryRecord(
                     session_id=session_id,
@@ -142,7 +152,7 @@ class GraphMemoryService:
                         )
                 )
                 return records
-        except Neo4jError:
+        except (Neo4jError, RuntimeError):
             fallback_messages = [
                 ChatMessage(role=rec.role, content=rec.content, timestamp=rec.timestamp)
                 for rec in sorted(self._fallback_records, key=lambda r: r.timestamp)
@@ -182,7 +192,7 @@ class GraphMemoryService:
                     notes=notes,
                 )
                 await result.consume()
-        except Neo4jError:
+        except (Neo4jError, RuntimeError):
             # fallback: just keep a memory record for display
             self._record_fallback(
                 MemoryRecord(
@@ -206,7 +216,7 @@ class GraphMemoryService:
             async with self.session() as neo_session:
                 result = await neo_session.run(query)
                 record = await result.single()
-        except Neo4jError:
+        except (Neo4jError, RuntimeError):
             self._prune_fallback_records()
             nodes: List[GraphNode] = []
             edges: List[GraphEdge] = []
@@ -273,25 +283,47 @@ class GraphMemoryService:
 
         nodes: List[GraphNode] = []
         edges: List[GraphEdge] = []
+
+        def _coerce_metadata(value: Any) -> Any:
+            if hasattr(value, "to_native"):
+                try:
+                    return _coerce_metadata(value.to_native())
+                except Exception:  # pragma: no cover - best effort conversion
+                    return str(value)
+            if isinstance(value, datetime):
+                return value.isoformat()
+            if isinstance(value, (list, tuple)):
+                return [_coerce_metadata(item) for item in value]
+            if isinstance(value, dict):
+                return {key: _coerce_metadata(val) for key, val in value.items()}
+            if hasattr(value, "isoformat"):
+                try:
+                    return value.isoformat()  # type: ignore[no-any-return]
+                except Exception:  # pragma: no cover - defensive serialization
+                    return str(value)
+            return value
+
         if record:
             for node in record["nodes"]:
+                metadata = {k: _coerce_metadata(v) for k, v in node.items()}
                 nodes.append(
                     GraphNode(
                         id=str(node.id),
                         label=next(iter(node.labels), "Node"),
                         type=next(iter(node.labels), "Node"),
-                        metadata={k: v for k, v in node.items()},
+                        metadata=metadata,
                     )
                 )
             for rel in record["rels"]:
                 if rel is None:
                     continue
+                metadata = {k: _coerce_metadata(v) for k, v in rel.items()}
                 edges.append(
                     GraphEdge(
                         source=str(rel.start_node.id),
                         target=str(rel.end_node.id),
                         relation=rel.type,
-                        metadata={k: v for k, v in rel.items()},
+                        metadata=metadata,
                     )
                 )
         return nodes, edges
@@ -299,7 +331,8 @@ class GraphMemoryService:
     async def close(self) -> None:
         """Close driver connections and cleanup."""
 
-        await self._driver.close()
+        if self._driver is not None:
+            await self._driver.close()
 
 
 async def generate_summary(messages: List[ChatMessage], ollama_client) -> str:
