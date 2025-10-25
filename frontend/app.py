@@ -180,7 +180,7 @@ tab_labels = [
     "📝 Memory tools",
     "🕸️ Knowledge graph",
 ]
-conversation_tab, memory_tab, graph_tab = st.tabs(tab_labels, key="main_tabs")
+conversation_tab, memory_tab, graph_tab = st.tabs(tab_labels)
 
 with conversation_tab:
     st.subheader("Live conversation")
@@ -199,14 +199,6 @@ with conversation_tab:
             st.warning(history_error)
         else:
             st.info("Start chatting to populate the short-term memory cache.")
-
-selected_tab_state = st.session_state.get("main_tabs", tab_labels[0])
-if isinstance(selected_tab_state, int):
-    selected_tab = tab_labels[selected_tab_state]
-elif isinstance(selected_tab_state, str) and selected_tab_state in tab_labels:
-    selected_tab = selected_tab_state
-else:
-    selected_tab = tab_labels[0]
 
 user_input = None
 if selected_tab == tab_labels[0]:
