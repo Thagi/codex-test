@@ -14,6 +14,18 @@ from neo4j.exceptions import Neo4jError, ServiceUnavailable
 from ..models.chat import ChatMessage, GraphEdge, GraphNode
 
 
+# Neo4j connectivity can fail with a variety of exception types depending on the
+# networking layer (e.g. DNS resolution raising ``ValueError`` or lower level
+# ``OSError`` variants). When those occur we fall back to the in-memory cache in
+# the same way we do for driver-provided ``Neo4jError`` subclasses.
+FALLBACK_EXCEPTIONS: Tuple[type[BaseException], ...] = (
+    Neo4jError,
+    ServiceUnavailable,
+    OSError,
+    ValueError,
+)
+
+
 @dataclass(slots=True)
 class MemoryRecord:
     """Fallback in-memory record when Neo4j is unavailable."""
@@ -117,7 +129,7 @@ class GraphMemoryService:
             async with self.session() as neo_session:
                 result = await neo_session.run(query, parameters)
                 await result.consume()
-        except (Neo4jError, ServiceUnavailable):
+        except FALLBACK_EXCEPTIONS:
             self._record_fallback(
                 MemoryRecord(
                     session_id=session_id,
@@ -155,7 +167,7 @@ class GraphMemoryService:
                         )
                 )
                 return records
-        except (Neo4jError, ServiceUnavailable):
+        except FALLBACK_EXCEPTIONS:
             fallback_messages = [
                 ChatMessage(role=rec.role, content=rec.content, timestamp=rec.timestamp)
                 for rec in sorted(self._fallback_records, key=lambda r: r.timestamp)
@@ -195,7 +207,7 @@ class GraphMemoryService:
                     notes=notes,
                 )
                 await result.consume()
-        except (Neo4jError, ServiceUnavailable):
+        except FALLBACK_EXCEPTIONS:
             # fallback: just keep a memory record for display
             self._record_fallback(
                 MemoryRecord(
@@ -219,7 +231,7 @@ class GraphMemoryService:
             async with self.session() as neo_session:
                 result = await neo_session.run(query)
                 record = await result.single()
-        except (Neo4jError, ServiceUnavailable):
+        except FALLBACK_EXCEPTIONS:
             self._prune_fallback_records()
             nodes: List[GraphNode] = []
             edges: List[GraphEdge] = []
