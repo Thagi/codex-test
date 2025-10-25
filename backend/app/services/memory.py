@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import AsyncIterator, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from neo4j import AsyncDriver, AsyncGraphDatabase, AsyncSession
@@ -68,6 +68,27 @@ class GraphMemoryService:
         if uri.startswith("neo4j://"):
             return "bolt://" + uri[len("neo4j://") :]
         return uri
+
+    @staticmethod
+    def _serialize_value(value: Any) -> Any:
+        """Convert Neo4j property values into JSON-serializable primitives."""
+
+        if hasattr(value, "to_native"):
+            value = value.to_native()
+
+        if isinstance(value, datetime):
+            return value.isoformat()
+
+        if isinstance(value, dict):
+            return {key: GraphMemoryService._serialize_value(val) for key, val in value.items()}
+
+        if isinstance(value, (list, tuple)):
+            return [GraphMemoryService._serialize_value(item) for item in value]
+
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+
+        return str(value)
 
     def _prune_fallback_records(self) -> None:
         """Drop expired fallback short-term records to keep memory bounded."""
@@ -305,7 +326,10 @@ class GraphMemoryService:
                         id=str(node.id),
                         label=next(iter(node.labels), "Node"),
                         type=next(iter(node.labels), "Node"),
-                        metadata={k: v for k, v in node.items()},
+                        metadata={
+                            key: self._serialize_value(val)
+                            for key, val in node.items()
+                        },
                     )
                 )
             for rel in record["rels"]:
@@ -316,7 +340,10 @@ class GraphMemoryService:
                         source=str(rel.start_node.id),
                         target=str(rel.end_node.id),
                         relation=rel.type,
-                        metadata={k: v for k, v in rel.items()},
+                        metadata={
+                            key: self._serialize_value(val)
+                            for key, val in rel.items()
+                        },
                     )
                 )
         return nodes, edges
