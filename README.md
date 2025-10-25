@@ -5,6 +5,7 @@ An AI chatbot that grows smarter through conversations by persisting memories in
 ## Features
 - **Adaptive memory**: Short-term conversation nodes consolidate into long-term knowledge with operator control.
 - **Graph inspection**: Visualize the knowledge graph from the Streamlit UI.
+- **Durable knowledge**: Neo4j stores chat memories on the host filesystem for reuse across container restarts.
 - **Modular services**: Streamlit, FastAPI, Neo4j, and Nginx orchestrated via Podman Compose (Docker Compose compatible). Ollama runs on the host and is consumed via HTTP.
 
 ## Architecture
@@ -64,6 +65,15 @@ make compose-down
 
 > **Tip:** Set `COMPOSE_CMD=docker-compose` when running `make compose-up` or `make compose-down` if you prefer Docker Compose.
 
+### Neo4j data persistence
+
+- Neo4j binds its `/data` and `/logs` directories to `./data/neo4j/data` and `./data/neo4j/logs` in this repository.
+- Because the data lives on the host filesystem, `make compose-down` (or `docker compose down`) does **not** delete your knowledge graph.
+- To reset the graph intentionally, either:
+  - use the **Clear graph** danger-zone control in the Streamlit UI's *Knowledge graph* tab, or
+  - call `DELETE /api/graph` manually, or
+  - delete the `data/neo4j/` directory before restarting the stack.
+
 ### Local Development
 Install backend dependencies:
 ```bash
@@ -98,7 +108,11 @@ Set environment variables (`NEO4J_URI`, `OLLAMA_BASE_URL`, etc.) when running se
   - `(:ChatSession)-[:YIELDED]->(:Knowledge)` summarizing session learnings
 
 ## Graph Visualization
-The Streamlit app fetches `/api/graph` and renders nodes/edges via PyVis. Use the "Refresh Graph View" button to pull the latest structure.
+The Streamlit app fetches `/api/graph` and renders nodes/edges via PyVis.
+
+- Use the "Refresh graph" control in the *Knowledge graph* tab to pull the latest structure.
+- Inspect raw JSON under the "Raw graph data" expander.
+- The "Clear graph" expander provides a guarded action to wipe stored memories when needed.
 
 ## Folder Structure
 ```
