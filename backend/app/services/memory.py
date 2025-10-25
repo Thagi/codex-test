@@ -153,7 +153,7 @@ class GraphMemoryService:
         try:
             async with self.session() as neo_session:
                 result = await neo_session.run(query, session_id=session_id)
-                neo4j_records = await result.to_list()
+                neo4j_records = [record async for record in result]
                 records = []
                 for record in neo4j_records:
                     timestamp = record["timestamp"]
