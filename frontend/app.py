@@ -180,6 +180,12 @@ tab_labels = [
     "📝 Memory tools",
     "🕸️ Knowledge graph",
 ]
+
+# Reserve a dedicated container for the chat input so it stays outside the tab layout
+# and cannot trigger Streamlit's restriction on interactive widgets within tabs. The
+# container also lets us add contextual guidance without repeating logic per tab.
+chat_input_container = st.container()
+
 conversation_tab, memory_tab, graph_tab = st.tabs(tab_labels)
 
 with conversation_tab:
@@ -200,9 +206,16 @@ with conversation_tab:
         else:
             st.info("Start chatting to populate the short-term memory cache.")
 
-user_input = None
-if selected_tab == tab_labels[0]:
-    user_input = st.chat_input(f"Message for session '{session_id}'", key="chat_input")
+with chat_input_container:
+    st.markdown("---")
+    st.caption(
+        "Send a message to continue the conversation. This input stays available even "
+        "when viewing the memory or graph tabs."
+    )
+    user_input = st.chat_input(
+        f"Message for session '{session_id}'",
+        key="chat_input",
+    )
 
 if user_input:
     with st.spinner("Sending message..."):
