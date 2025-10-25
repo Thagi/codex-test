@@ -308,5 +308,6 @@ with graph_tab:
                     st.error(f"Failed to clear graph: {exc}")
                 else:
                     st.success("Graph cleared. Existing chat sessions will start fresh.")
+                    st.session_state.messages = []
                     st.session_state.graph_data = {"nodes": [], "edges": []}
                     st.rerun()
