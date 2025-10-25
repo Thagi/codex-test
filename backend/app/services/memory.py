@@ -8,8 +8,7 @@ from datetime import datetime, timedelta
 from typing import AsyncIterator, Dict, List, Optional, Tuple
 from uuid import uuid4
 
-from neo4j import AsyncGraphDatabase
-from neo4j.async_ import AsyncSession
+from neo4j import AsyncDriver, AsyncGraphDatabase, AsyncSession
 from neo4j.exceptions import Neo4jError
 
 from ..models.chat import ChatMessage, GraphEdge, GraphNode
@@ -41,7 +40,10 @@ class GraphMemoryService:
         self._password = password
         self._ttl = timedelta(minutes=short_term_ttl_minutes)
         self._ttl_minutes = short_term_ttl_minutes
-        self._driver = AsyncGraphDatabase.driver(uri, auth=(user, password))
+        self._driver: AsyncDriver = AsyncGraphDatabase.driver(
+            uri,
+            auth=(user, password),
+        )
         self._fallback_records: list[MemoryRecord] = []
 
     def _prune_fallback_records(self) -> None:
