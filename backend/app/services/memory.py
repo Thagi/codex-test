@@ -5,11 +5,13 @@ from contextlib import asynccontextmanager
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import AsyncIterator, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, AsyncIterator, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from neo4j import AsyncGraphDatabase
-from neo4j.async_ import AsyncSession
+
+if TYPE_CHECKING:  # pragma: no cover - imported for typing only
+    from neo4j import AsyncSession
 from neo4j.exceptions import Neo4jError
 
 from ..models.chat import ChatMessage, GraphEdge, GraphNode
@@ -61,7 +63,7 @@ class GraphMemoryService:
         self._fallback_records.append(record)
 
     @asynccontextmanager
-    async def session(self) -> AsyncIterator[AsyncSession]:
+    async def session(self) -> AsyncIterator["AsyncSession"]:
         """Context manager returning an async Neo4j session."""
 
         async with self._driver.session() as session:
