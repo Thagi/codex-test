@@ -35,32 +35,27 @@ class GraphMemoryService:
         password: str,
         short_term_ttl_minutes: int,
     ) -> None:
-        normalized_uri, routing_enabled = self._prepare_driver_config(uri)
+        normalized_uri = self._normalize_uri(uri)
         self._uri = normalized_uri
         self._user = user
         self._password = password
         self._ttl = timedelta(minutes=short_term_ttl_minutes)
         self._ttl_minutes = short_term_ttl_minutes
         driver_kwargs: dict[str, object] = {"auth": (user, password)}
-        if not routing_enabled:
-            driver_kwargs["routing"] = False
         self._driver = AsyncGraphDatabase.driver(normalized_uri, **driver_kwargs)
         self._fallback_records: list[MemoryRecord] = []
 
     @staticmethod
-    def _prepare_driver_config(uri: str) -> tuple[str, bool]:
-        """Return a driver URI and whether routing should remain enabled."""
+    def _normalize_uri(uri: str) -> str:
+        """Return a Neo4j bolt URI suitable for direct connections."""
 
-        routing_enabled = True
         if uri.startswith("neo4j+ssc://"):
-            return "bolt+ssc://" + uri[len("neo4j+ssc://") :], False
+            return "bolt+ssc://" + uri[len("neo4j+ssc://") :]
         if uri.startswith("neo4j+s://"):
-            return "bolt+s://" + uri[len("neo4j+s://") :], False
+            return "bolt+s://" + uri[len("neo4j+s://") :]
         if uri.startswith("neo4j://"):
-            return "bolt://" + uri[len("neo4j://") :], False
-        if uri.startswith("bolt"):
-            routing_enabled = False
-        return uri, routing_enabled
+            return "bolt://" + uri[len("neo4j://") :]
+        return uri
 
     def _prune_fallback_records(self) -> None:
         """Drop expired fallback short-term records to keep memory bounded."""

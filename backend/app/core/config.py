@@ -25,7 +25,9 @@ class Settings(BaseSettings):
     # to protect existing `.env` files that still use the routing scheme.
     neo4j_uri: str = Field(default="bolt://neo4j:7687", description="Neo4j bolt URI")
     neo4j_user: str = Field(default="neo4j", description="Neo4j username")
-    neo4j_password: str = Field(default="neo4j", description="Neo4j password")
+    neo4j_password: str = Field(
+        default="neo4j_dev_password", description="Neo4j password"
+    )
     short_term_ttl_minutes: int = Field(
         default=60, description="Time-to-live for short-term memory nodes"
     )
