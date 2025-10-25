@@ -68,7 +68,11 @@ with st.sidebar:
     st.markdown("Backend endpoint: `%s`" % BACKEND_URL)
 
 chat_container = st.container()
-input_col, action_col = st.columns([3, 1])
+# Reserve horizontal space for the action controls while keeping the
+# chat input outside of disallowed layout primitives. Streamlit does not
+# permit ``st.chat_input`` inside ``st.columns``, so we use an unused
+# spacer column purely for layout and render the chat input afterward.
+spacer_col, action_col = st.columns([3, 1])
 
 def _refresh_graph() -> None:
     graph_data = _load_graph()
@@ -92,8 +96,12 @@ with chat_container:
         with st.chat_message(message["role"]):
             st.write(message["content"])
 
-with input_col:
-    user_input = st.chat_input("Send a message", key="chat_input")
+
+with spacer_col:
+    st.markdown("### Chat")
+    st.caption("Use the input below to send a message to the assistant.")
+
+user_input = st.chat_input("Send a message", key="chat_input")
 
 with action_col:
     st.markdown("### Actions")

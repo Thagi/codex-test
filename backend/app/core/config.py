@@ -2,7 +2,7 @@
 from functools import lru_cache
 from typing import Optional
 
-from pydantic import BaseSettings, Field
+from pydantic.v1 import BaseSettings, Field
 
 
 class Settings(BaseSettings):
@@ -21,7 +21,9 @@ class Settings(BaseSettings):
         default=60, description="Time-to-live for short-term memory nodes"
     )
     allow_origins: list[str] = Field(default_factory=lambda: ["*"], description="CORS origins")
-    nginx_host: Optional[str] = Field(default=None, description="Optional upstream host for Nginx health checks")
+    nginx_host: Optional[str] = Field(
+        default=None, description="Optional upstream host for Nginx health checks"
+    )
 
     class Config:
         env_file = ".env"
