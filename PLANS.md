@@ -1,42 +1,36 @@
 # Implementation Plan
 
-## 1. Repository scaffolding
-- Initialize Python package structure for backend (`backend/`) and frontend (`frontend/`).
-- Add `pyproject.toml` or `requirements.txt` for both Streamlit and FastAPI services.
-- Provide shared configuration files (e.g., `.env.example`, `docker-compose.yml`) including services for FastAPI, Streamlit, Neo4j, Ollama, and Nginx.
+## Current state snapshot
 
-## 2. Backend (FastAPI)
-- Create FastAPI app with endpoints for:
-  - Initiating chat sessions and receiving user messages.
-  - Fetching conversation history / memory snapshots.
-  - Triggering long-term memory consolidation.
-  - Serving graph data for visualization.
-- Implement service layer for interacting with Neo4j (short-term & long-term graphs) and Ollama API client for `gpt-oss-20b`.
-- Include background or helper tasks for consolidating short-term to long-term memory when triggered.
+- **Backend** – FastAPI app under `backend/app` exposes chat, memory, and graph endpoints, persisting data in Neo4j with an in-process fallback cache for outages.
+- **Frontend** – Streamlit UI in `frontend/app.py` provides chat, consolidation controls, and PyVis graph visualisation.
+- **Infrastructure** – `docker-compose.yml` orchestrates backend, frontend, Neo4j, and Nginx; the Makefile wraps local dev and compose workflows.
+- **Testing** – Minimal pytest coverage exists for configuration defaults.
 
-## 3. Frontend (Streamlit)
-- Build Streamlit interface with:
-  - Chat UI interacting with FastAPI endpoints.
-  - Button to trigger long-term memory update.
-  - Graph visualization component (e.g., using `pyvis` or `plotly`) displaying Neo4j graph data.
-  - Status indicators / logs of conversation and memory operations.
+## Near-term enhancements
 
-## 4. Graph memory modeling
-- Define Neo4j schema for short-term and long-term memory subgraphs.
-- Implement CRUD operations for:
-  - Inserting short-term conversation nodes/edges.
-  - Consolidating short-term paths into long-term knowledge nodes and relationships.
-  - Querying aggregated knowledge for retrieval in chat responses.
-- Ensure separation between short-term and long-term regions and maintain metadata (timestamps, relevance).
+1. **Broaden automated tests**
+   - Add unit tests for `GraphMemoryService` covering short-term inserts, consolidation Cypher, fallback pruning, and graph export helpers.
+   - Mock the Ollama client to test `generate_summary` prompt construction without hitting the external service.
 
-## 5. Infrastructure & deployment
-- Configure Nginx as reverse proxy routing to Streamlit and FastAPI services.
-- Provide Dockerfiles for frontend, backend, and Nginx.
-- Compose services via `docker-compose` including Neo4j and Ollama container instructions (assuming external installation or instructions to connect to host).
-- Add Makefile targets for common tasks (setup, run, test).
+2. **Improve retrieval quality**
+   - Feed long-term knowledge back into the chat prompt (e.g., retrieve recent `Knowledge` nodes per session before generating a reply).
+   - Surface consolidated knowledge in the Streamlit conversation view so operators can see what the model already knows.
 
-## 6. Documentation & testing
-- Update `README.md` with setup, configuration, and usage instructions.
-- Document memory model and system architecture.
-- Add unit/integration tests where feasible (e.g., service layer mocks for Neo4j/Ollama interactions).
-- Ensure linting/formatting instructions included if tools provided.
+3. **Observability & resilience**
+   - Emit structured logging around Neo4j failures and fallback usage to aid debugging.
+   - Add health endpoints or status cards indicating Neo4j / Ollama connectivity in the Streamlit sidebar.
+
+4. **Graph UX refinements**
+   - Provide filters (by session, node type) in the graph tab.
+   - Highlight edges contributing to a selected knowledge node and show summaries inline.
+
+5. **Deployment polish**
+   - Supply production-ready configuration samples (TLS termination for Nginx, resource limits).
+   - Document how to scale the backend horizontally while reusing the Neo4j instance.
+
+## Stretch goals
+
+- Introduce background workers to consolidate short-term memory automatically based on heuristics.
+- Explore embedding-based recall (e.g., integrate a vector store) to supplement graph traversal for retrieval.
+- Add end-to-end tests that exercise the Streamlit front-end against a seeded backend using Playwright.
