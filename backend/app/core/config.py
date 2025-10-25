@@ -10,7 +10,8 @@ class Settings(BaseSettings):
 
     app_name: str = Field(default="graph-mem-chat-backend", description="Service name")
     ollama_base_url: str = Field(
-        default="http://ollama:11434", description="Base URL for the Ollama service"
+        default="http://host.containers.internal:11434",
+        description="Base URL for the Ollama service",
     )
     ollama_model: str = Field(default="gpt-oss-20b", description="Name of the Ollama model")
     neo4j_uri: str = Field(default="neo4j://neo4j:7687", description="Neo4j bolt URI")

@@ -5,7 +5,7 @@ An AI chatbot that grows smarter through conversations by persisting memories in
 ## Features
 - **Adaptive memory**: Short-term conversation nodes consolidate into long-term knowledge with operator control.
 - **Graph inspection**: Visualize the knowledge graph from the Streamlit UI.
-- **Modular services**: Streamlit, FastAPI, Neo4j, Ollama, and Nginx orchestrated via Docker Compose.
+- **Modular services**: Streamlit, FastAPI, Neo4j, and Nginx orchestrated via Podman Compose (Docker Compose compatible). Ollama runs on the host and is consumed via HTTP.
 
 ## Architecture
 ```
@@ -20,7 +20,7 @@ Short-term memory stores individual exchanges linked as a path; a manual consoli
 ## Getting Started
 
 ### Prerequisites
-- Docker & Docker Compose
+- Podman & podman-compose
 - (Optional) Python 3.11 for local development without containers
 
 ### Configuration
@@ -29,12 +29,18 @@ Copy `.env.example` to `.env` and adjust values as needed:
 cp .env.example .env
 ```
 
-Ensure the Ollama service has the `gpt-oss-20b` model pulled:
+### Ollama setup
+Run Ollama separately on the host machine and make sure the `gpt-oss-20b` model is available:
 ```bash
-docker exec -it <ollama_container> ollama pull gpt-oss-20b
+ollama pull gpt-oss-20b
+ollama serve
 ```
 
-### Run with Docker Compose
+With Podman the containers can reach the host via `http://host.containers.internal`. The default `.env` points `OLLAMA_BASE_URL` to `http://host.containers.internal:11434` so no additional networking tweaks are required.
+
+> **Using Docker instead of Podman?** Update `OLLAMA_BASE_URL` to `http://host.docker.internal:11434` in your `.env` file so the backend can reach the host Ollama instance.
+
+### Run with Podman Compose
 ```bash
 make compose-up
 ```
@@ -44,6 +50,8 @@ Stop the stack with:
 ```bash
 make compose-down
 ```
+
+> **Tip:** Set `COMPOSE_CMD=docker-compose` when running `make compose-up` or `make compose-down` if you prefer Docker Compose.
 
 ### Local Development
 Install backend dependencies:

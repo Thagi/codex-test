@@ -1,5 +1,8 @@
 .PHONY: install-backend install-frontend dev-backend dev-frontend compose-up compose-down lint
 
+COMPOSE_CMD ?= podman-compose
+COMPOSE_FILE ?= docker-compose.yml
+
 install-backend:
 python -m venv .venv-backend && . .venv-backend/bin/activate && pip install -r backend/requirements.txt
 
@@ -13,7 +16,7 @@ dev-frontend:
 streamlit run frontend/app.py --server.port $${FRONTEND_PORT:-8501}
 
 compose-up:
-docker-compose up --build
+	$(COMPOSE_CMD) -f $(COMPOSE_FILE) up --build
 
 compose-down:
-docker-compose down
+	$(COMPOSE_CMD) -f $(COMPOSE_FILE) down
