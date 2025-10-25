@@ -29,6 +29,11 @@ Copy `.env.example` to `.env` and adjust values as needed:
 cp .env.example .env
 ```
 
+The sample configuration defaults `NEO4J_URI` to `bolt://neo4j:7687` so the
+backend connects directly to the single Neo4j instance without attempting
+routing-table discovery (which can trigger `Unable to retrieve routing
+information` errors).
+
 ### Ollama setup
 Run Ollama separately on the host machine and make sure the `gpt-oss-20b` model is available:
 ```bash
