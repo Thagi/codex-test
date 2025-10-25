@@ -5,13 +5,25 @@ from contextlib import asynccontextmanager
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import AsyncIterator, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from neo4j import AsyncDriver, AsyncGraphDatabase, AsyncSession
-from neo4j.exceptions import Neo4jError
+from neo4j.exceptions import Neo4jError, ServiceUnavailable
 
 from ..models.chat import ChatMessage, GraphEdge, GraphNode
+
+
+# Neo4j connectivity can fail with a variety of exception types depending on the
+# networking layer (e.g. DNS resolution raising ``ValueError`` or lower level
+# ``OSError`` variants). When those occur we fall back to the in-memory cache in
+# the same way we do for driver-provided ``Neo4jError`` subclasses.
+FALLBACK_EXCEPTIONS: Tuple[type[BaseException], ...] = (
+    Neo4jError,
+    ServiceUnavailable,
+    OSError,
+    ValueError,
+)
 
 
 @dataclass(slots=True)
@@ -35,16 +47,48 @@ class GraphMemoryService:
         password: str,
         short_term_ttl_minutes: int,
     ) -> None:
-        self._uri = uri
+        normalized_uri = self._normalize_uri(uri)
+        self._uri = normalized_uri
         self._user = user
         self._password = password
         self._ttl = timedelta(minutes=short_term_ttl_minutes)
         self._ttl_minutes = short_term_ttl_minutes
-        self._driver: AsyncDriver = AsyncGraphDatabase.driver(
-            uri,
-            auth=(user, password),
-        )
+        driver_kwargs: dict[str, object] = {"auth": (user, password)}
+        self._driver = AsyncGraphDatabase.driver(normalized_uri, **driver_kwargs)
         self._fallback_records: list[MemoryRecord] = []
+
+    @staticmethod
+    def _normalize_uri(uri: str) -> str:
+        """Return a Neo4j bolt URI suitable for direct connections."""
+
+        if uri.startswith("neo4j+ssc://"):
+            return "bolt+ssc://" + uri[len("neo4j+ssc://") :]
+        if uri.startswith("neo4j+s://"):
+            return "bolt+s://" + uri[len("neo4j+s://") :]
+        if uri.startswith("neo4j://"):
+            return "bolt://" + uri[len("neo4j://") :]
+        return uri
+
+    @staticmethod
+    def _serialize_value(value: Any) -> Any:
+        """Convert Neo4j property values into JSON-serializable primitives."""
+
+        if hasattr(value, "to_native"):
+            value = value.to_native()
+
+        if isinstance(value, datetime):
+            return value.isoformat()
+
+        if isinstance(value, dict):
+            return {key: GraphMemoryService._serialize_value(val) for key, val in value.items()}
+
+        if isinstance(value, (list, tuple)):
+            return [GraphMemoryService._serialize_value(item) for item in value]
+
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+
+        return str(value)
 
     def _prune_fallback_records(self) -> None:
         """Drop expired fallback short-term records to keep memory bounded."""
@@ -106,7 +150,7 @@ class GraphMemoryService:
             async with self.session() as neo_session:
                 result = await neo_session.run(query, parameters)
                 await result.consume()
-        except Neo4jError:
+        except FALLBACK_EXCEPTIONS:
             self._record_fallback(
                 MemoryRecord(
                     session_id=session_id,
@@ -130,7 +174,7 @@ class GraphMemoryService:
         try:
             async with self.session() as neo_session:
                 result = await neo_session.run(query, session_id=session_id)
-                neo4j_records = await result.to_list()
+                neo4j_records = [record async for record in result]
                 records = []
                 for record in neo4j_records:
                     timestamp = record["timestamp"]
@@ -144,7 +188,7 @@ class GraphMemoryService:
                         )
                 )
                 return records
-        except Neo4jError:
+        except FALLBACK_EXCEPTIONS:
             fallback_messages = [
                 ChatMessage(role=rec.role, content=rec.content, timestamp=rec.timestamp)
                 for rec in sorted(self._fallback_records, key=lambda r: r.timestamp)
@@ -184,7 +228,7 @@ class GraphMemoryService:
                     notes=notes,
                 )
                 await result.consume()
-        except Neo4jError:
+        except FALLBACK_EXCEPTIONS:
             # fallback: just keep a memory record for display
             self._record_fallback(
                 MemoryRecord(
@@ -208,7 +252,7 @@ class GraphMemoryService:
             async with self.session() as neo_session:
                 result = await neo_session.run(query)
                 record = await result.single()
-        except Neo4jError:
+        except FALLBACK_EXCEPTIONS:
             self._prune_fallback_records()
             nodes: List[GraphNode] = []
             edges: List[GraphEdge] = []
@@ -282,7 +326,10 @@ class GraphMemoryService:
                         id=str(node.id),
                         label=next(iter(node.labels), "Node"),
                         type=next(iter(node.labels), "Node"),
-                        metadata={k: v for k, v in node.items()},
+                        metadata={
+                            key: self._serialize_value(val)
+                            for key, val in node.items()
+                        },
                     )
                 )
             for rel in record["rels"]:
@@ -293,7 +340,10 @@ class GraphMemoryService:
                         source=str(rel.start_node.id),
                         target=str(rel.end_node.id),
                         relation=rel.type,
-                        metadata={k: v for k, v in rel.items()},
+                        metadata={
+                            key: self._serialize_value(val)
+                            for key, val in rel.items()
+                        },
                     )
                 )
         return nodes, edges
