@@ -200,7 +200,9 @@ with conversation_tab:
         else:
             st.info("Start chatting to populate the short-term memory cache.")
 
-user_input = st.chat_input(f"Message for session '{session_id}'", key="chat_input")
+user_input = None
+if selected_tab == tab_labels[0]:
+    user_input = st.chat_input(f"Message for session '{session_id}'", key="chat_input")
 
 if user_input:
     with st.spinner("Sending message..."):
