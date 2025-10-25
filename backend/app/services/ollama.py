@@ -17,7 +17,11 @@ class OllamaClient:
     async def generate(self, prompt: str, context: list[dict[str, Any]] | None = None) -> str:
         """Call the Ollama chat endpoint and return the generated text."""
 
-        payload: Dict[str, Any] = {"model": self._model, "prompt": prompt}
+        payload: Dict[str, Any] = {
+            "model": self._model,
+            "prompt": prompt,
+            "stream": False,
+        }
         if context:
             payload["context"] = context
         response = await self._client.post("/api/generate", json=payload)

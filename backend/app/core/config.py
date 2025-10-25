@@ -14,9 +14,20 @@ class Settings(BaseSettings):
         description="Base URL for the Ollama service",
     )
     ollama_model: str = Field(default="gpt-oss-20b", description="Name of the Ollama model")
-    neo4j_uri: str = Field(default="neo4j://neo4j:7687", description="Neo4j bolt URI")
+    # NOTE:
+    # The single-instance Neo4j deployment used in development does not expose the
+    # routing metadata required by the `neo4j://` scheme. Using the routing scheme
+    # causes the official driver to request a routing table and fail with
+    # "Unable to retrieve routing information". The `bolt://` scheme connects
+    # directly without routing and is compatible with both single-instance and
+    # clustered deployments, so we default to it here. The memory service will
+    # also coerce any `neo4j://` URI to the equivalent bolt variant at runtime
+    # to protect existing `.env` files that still use the routing scheme.
+    neo4j_uri: str = Field(default="bolt://neo4j:7687", description="Neo4j bolt URI")
     neo4j_user: str = Field(default="neo4j", description="Neo4j username")
-    neo4j_password: str = Field(default="neo4j", description="Neo4j password")
+    neo4j_password: str = Field(
+        default="neo4j_dev_password", description="Neo4j password"
+    )
     short_term_ttl_minutes: int = Field(
         default=60, description="Time-to-live for short-term memory nodes"
     )
