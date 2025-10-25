@@ -59,7 +59,7 @@ def _render_graph(graph_data: dict) -> None:
         network.add_node(
             node["id"],
             label=node.get("label", node["id"]),
-            title=json.dumps(node.get("metadata", {}), indent=2),
+            title=json.dumps(node.get("metadata", {}), indent=2, ensure_ascii=False),
             color="#4C78A8" if node.get("type") == "ShortTermMessage" else "#F58518",
         )
     for edge in graph_data.get("edges", []):
