@@ -20,7 +20,9 @@ class Settings(BaseSettings):
     # causes the official driver to request a routing table and fail with
     # "Unable to retrieve routing information". The `bolt://` scheme connects
     # directly without routing and is compatible with both single-instance and
-    # clustered deployments, so we default to it here.
+    # clustered deployments, so we default to it here. The memory service will
+    # also coerce any `neo4j://` URI to the equivalent bolt variant at runtime
+    # to protect existing `.env` files that still use the routing scheme.
     neo4j_uri: str = Field(default="bolt://neo4j:7687", description="Neo4j bolt URI")
     neo4j_user: str = Field(default="neo4j", description="Neo4j username")
     neo4j_password: str = Field(default="neo4j", description="Neo4j password")

@@ -9,7 +9,7 @@ from typing import AsyncIterator, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from neo4j import AsyncDriver, AsyncGraphDatabase, AsyncSession
-from neo4j.exceptions import Neo4jError
+from neo4j.exceptions import Neo4jError, ServiceUnavailable
 
 from ..models.chat import ChatMessage, GraphEdge, GraphNode
 
@@ -35,16 +35,32 @@ class GraphMemoryService:
         password: str,
         short_term_ttl_minutes: int,
     ) -> None:
-        self._uri = uri
+        normalized_uri, routing_enabled = self._prepare_driver_config(uri)
+        self._uri = normalized_uri
         self._user = user
         self._password = password
         self._ttl = timedelta(minutes=short_term_ttl_minutes)
         self._ttl_minutes = short_term_ttl_minutes
-        self._driver: AsyncDriver = AsyncGraphDatabase.driver(
-            uri,
-            auth=(user, password),
-        )
+        driver_kwargs: dict[str, object] = {"auth": (user, password)}
+        if not routing_enabled:
+            driver_kwargs["routing"] = False
+        self._driver = AsyncGraphDatabase.driver(normalized_uri, **driver_kwargs)
         self._fallback_records: list[MemoryRecord] = []
+
+    @staticmethod
+    def _prepare_driver_config(uri: str) -> tuple[str, bool]:
+        """Return a driver URI and whether routing should remain enabled."""
+
+        routing_enabled = True
+        if uri.startswith("neo4j+ssc://"):
+            return "bolt+ssc://" + uri[len("neo4j+ssc://") :], False
+        if uri.startswith("neo4j+s://"):
+            return "bolt+s://" + uri[len("neo4j+s://") :], False
+        if uri.startswith("neo4j://"):
+            return "bolt://" + uri[len("neo4j://") :], False
+        if uri.startswith("bolt"):
+            routing_enabled = False
+        return uri, routing_enabled
 
     def _prune_fallback_records(self) -> None:
         """Drop expired fallback short-term records to keep memory bounded."""
@@ -106,7 +122,7 @@ class GraphMemoryService:
             async with self.session() as neo_session:
                 result = await neo_session.run(query, parameters)
                 await result.consume()
-        except Neo4jError:
+        except (Neo4jError, ServiceUnavailable):
             self._record_fallback(
                 MemoryRecord(
                     session_id=session_id,
@@ -144,7 +160,7 @@ class GraphMemoryService:
                         )
                 )
                 return records
-        except Neo4jError:
+        except (Neo4jError, ServiceUnavailable):
             fallback_messages = [
                 ChatMessage(role=rec.role, content=rec.content, timestamp=rec.timestamp)
                 for rec in sorted(self._fallback_records, key=lambda r: r.timestamp)
@@ -184,7 +200,7 @@ class GraphMemoryService:
                     notes=notes,
                 )
                 await result.consume()
-        except Neo4jError:
+        except (Neo4jError, ServiceUnavailable):
             # fallback: just keep a memory record for display
             self._record_fallback(
                 MemoryRecord(
@@ -208,7 +224,7 @@ class GraphMemoryService:
             async with self.session() as neo_session:
                 result = await neo_session.run(query)
                 record = await result.single()
-        except Neo4jError:
+        except (Neo4jError, ServiceUnavailable):
             self._prune_fallback_records()
             nodes: List[GraphNode] = []
             edges: List[GraphEdge] = []
