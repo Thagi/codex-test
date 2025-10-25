@@ -109,3 +109,13 @@ async def graph_snapshot(
 
     nodes, edges = await memory_service.get_graph_snapshot()
     return GraphSnapshot(nodes=nodes, edges=edges)
+
+
+@router.delete("/graph", tags=["graph"])
+async def clear_graph(
+    memory_service: GraphMemoryService = Depends(get_memory_service),
+) -> dict[str, str]:
+    """Delete all nodes and relationships from the graph."""
+
+    await memory_service.clear_graph()
+    return {"status": "graph cleared"}

@@ -37,6 +37,12 @@ def _load_graph() -> dict:
     return response.json()
 
 
+def _clear_graph() -> dict:
+    response = requests.delete(f"{BACKEND_URL}/graph", timeout=30)
+    response.raise_for_status()
+    return response.json()
+
+
 def _load_short_term_history(session_id: str) -> tuple[list[dict] | None, str | None]:
     try:
         response = requests.get(f"{BACKEND_URL}/memory/{session_id}", timeout=30)
@@ -53,7 +59,7 @@ def _render_graph(graph_data: dict) -> None:
         network.add_node(
             node["id"],
             label=node.get("label", node["id"]),
-            title=json.dumps(node.get("metadata", {}), indent=2),
+            title=json.dumps(node.get("metadata", {}), indent=2, ensure_ascii=False),
             color="#4C78A8" if node.get("type") == "ShortTermMessage" else "#F58518",
         )
     for edge in graph_data.get("edges", []):
@@ -74,6 +80,11 @@ st.markdown(
         .stApp {
             background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%);
         }
+        .main .block-container {
+            padding-top: 1.5rem;
+            padding-bottom: 2rem;
+            max-width: 1200px;
+        }
         div[data-testid="stSidebar"] {
             background-color: #f1f5f9;
         }
@@ -91,6 +102,9 @@ st.markdown(
         div[data-testid="stChatMessage"] p {
             font-size: 0.95rem;
             line-height: 1.55rem;
+        }
+        .stTabs [role="tab"] {
+            padding: 0.75rem 1.25rem;
         }
         .graph-card {
             background-color: #ffffff;
@@ -143,76 +157,127 @@ if history_data and not st.session_state.messages:
         for item in history_data
     ]
 
-main_container = st.container()
-with main_container:
-    chat_col, insight_col = st.columns([3, 2], gap="large")
+graph_data = st.session_state.get("graph_data", {"nodes": [], "edges": []})
+node_count = len(graph_data.get("nodes", []))
+edge_count = len(graph_data.get("edges", []))
+session_count = len(
+    {
+        node.get("metadata", {}).get("session_id")
+        for node in graph_data.get("nodes", [])
+        if node.get("metadata", {}).get("session_id")
+    }
+)
+message_count = len(st.session_state.messages)
 
-    with chat_col:
-        st.subheader("Live conversation")
-        st.caption("Messages flow into short-term memory before consolidation.")
-        chat_stream = st.container()
-        with chat_stream:
-            for message in st.session_state.messages:
-                with st.chat_message(message["role"]):
-                    st.markdown(message["content"])
+stat_cols = st.columns(4)
+stat_cols[0].metric("Messages", message_count)
+stat_cols[1].metric("Sessions tracked", session_count or 0)
+stat_cols[2].metric("Graph nodes", node_count)
+stat_cols[3].metric("Graph edges", edge_count)
 
-        with st.expander("Short-term memory snapshot", expanded=False):
-            if history_data:
-                st.json(history_data)
-            elif history_error:
-                st.warning(history_error)
+conversation_tab, memory_tab, graph_tab = st.tabs([
+    "💬 Conversation",
+    "📝 Memory tools",
+    "🕸️ Knowledge graph",
+])
+
+with conversation_tab:
+    st.subheader("Live conversation")
+    st.caption("Messages flow into short-term memory before consolidation.")
+    if st.session_state.messages:
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+    else:
+        st.info("Start the dialogue using the input below.")
+
+    with st.expander("Short-term memory snapshot", expanded=False):
+        if history_data:
+            st.json(history_data)
+        elif history_error:
+            st.warning(history_error)
+        else:
+            st.info("Start chatting to populate the short-term memory cache.")
+
+with memory_tab:
+    st.subheader("Consolidate knowledge")
+    st.caption("Summarize recent exchanges into long-term knowledge nodes.")
+    consolidate_notes = st.text_area(
+        "Optional consolidation notes",
+        placeholder="Highlight facts worth retaining in long-term memory...",
+        height=140,
+        key="consolidate_notes",
+    )
+    trigger_consolidation = st.button(
+        "Trigger update",
+        use_container_width=True,
+        key="trigger_consolidation_button",
+    )
+
+    if trigger_consolidation:
+        with st.spinner("Consolidating conversation..."):
+            try:
+                result = _trigger_consolidation(session_id, consolidate_notes or None)
+            except requests.RequestException as exc:
+                st.error(f"Failed to consolidate: {exc}")
             else:
-                st.info("Start chatting to populate the short-term memory cache.")
-
-    with insight_col:
-        st.subheader("Memory tools")
-        st.caption("Summarize recent exchanges into long-term knowledge nodes.")
-        consolidate_notes = st.text_area(
-            "Optional consolidation notes",
-            placeholder="Highlight facts worth retaining in long-term memory...",
-            height=140,
-        )
-        action_col, refresh_col = st.columns(2)
-        trigger_consolidation = action_col.button(
-            "Trigger Update",
-            use_container_width=True,
-        )
-        refresh_graph = refresh_col.button(
-            "Refresh Graph",
-            use_container_width=True,
-        )
-
-        if trigger_consolidation:
-            with st.spinner("Consolidating conversation..."):
-                try:
-                    result = _trigger_consolidation(session_id, consolidate_notes or None)
-                except requests.RequestException as exc:
-                    st.error(f"Failed to consolidate: {exc}")
-                else:
-                    st.success(f"Knowledge node created: {result['knowledge_id']}")
-                    st.info(result["summary"])
-                    try:
-                        _refresh_graph()
-                    except requests.RequestException as exc:
-                        st.warning(f"Could not refresh graph: {exc}")
-
-        if refresh_graph:
-            with st.spinner("Refreshing graph..."):
+                st.success(f"Knowledge node created: {result['knowledge_id']}")
+                st.info(result["summary"])
                 try:
                     _refresh_graph()
                 except requests.RequestException as exc:
-                    st.error(f"Failed to load graph: {exc}")
+                    st.warning(f"Could not refresh graph: {exc}")
+                else:
+                    st.rerun()
 
-        st.divider()
-        st.subheader("Knowledge graph")
-        vis_tab, raw_tab = st.tabs(["Visualization", "Raw data"])
-        with vis_tab:
-            if st.session_state.get("graph_data", {}).get("nodes"):
-                _render_graph(st.session_state["graph_data"])
+with graph_tab:
+    st.subheader("Knowledge graph overview")
+    st.caption("Inspect the current memory graph and manage stored knowledge.")
+    refresh_graph = st.button(
+        "Refresh graph",
+        use_container_width=True,
+        key="refresh_graph_button",
+    )
+
+    if refresh_graph:
+        with st.spinner("Refreshing graph..."):
+            try:
+                _refresh_graph()
+            except requests.RequestException as exc:
+                st.error(f"Failed to load graph: {exc}")
             else:
-                st.info("Graph will appear after interactions are stored.")
-        with raw_tab:
-            st.json(st.session_state.get("graph_data", {"nodes": [], "edges": []}))
+                st.rerun()
+
+    if graph_data.get("nodes"):
+        _render_graph(graph_data)
+    else:
+        st.info("Graph will appear after interactions are stored.")
+
+    with st.expander("Raw graph data", expanded=False):
+        st.json(graph_data)
+
+    with st.expander("Danger zone: clear stored graph", expanded=False):
+        st.warning("Removing the graph deletes all stored chat memories and knowledge nodes.")
+        confirmation = st.text_input(
+            "Type DELETE to confirm graph reset",
+            key="clear_graph_confirmation",
+        )
+        clear_graph = st.button(
+            "Clear graph",
+            use_container_width=True,
+            key="clear_graph_button",
+            disabled=confirmation.strip().upper() != "DELETE",
+        )
+        if clear_graph:
+            with st.spinner("Clearing graph..."):
+                try:
+                    _clear_graph()
+                except requests.RequestException as exc:
+                    st.error(f"Failed to clear graph: {exc}")
+                else:
+                    st.success("Graph cleared. Existing chat sessions will start fresh.")
+                    st.session_state.graph_data = {"nodes": [], "edges": []}
+                    st.rerun()
 
 user_input = st.chat_input(f"Message for session '{session_id}'", key="chat_input")
 
