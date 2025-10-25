@@ -50,15 +50,11 @@ services:
       timeout: 10s
       retries: 5
     volumes:
-      - neo4j_data:/data
-      - neo4j_logs:/logs
+      - ./data/neo4j/data:/data
+      - ./data/neo4j/logs:/logs
     networks:
       - app-net
 
 networks:
   app-net:
     name: app-net
-
-volumes:
-  neo4j_data:
-  neo4j_logs:
