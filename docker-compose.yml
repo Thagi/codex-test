@@ -1,0 +1,78 @@
+version: "3.9"
+
+services:
+  backend:
+    build: ./backend
+    env_file:
+      - .env
+    environment:
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
+      OLLAMA_MODEL: ${OLLAMA_MODEL}
+      NEO4J_URI: ${NEO4J_URI}
+      NEO4J_USER: ${NEO4J_USER}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD}
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    networks:
+      - app-net
+
+  frontend:
+    build: ./frontend
+    env_file:
+      - .env
+    environment:
+      BACKEND_URL: http://nginx/api
+    depends_on:
+      - backend
+    networks:
+      - app-net
+
+  nginx:
+    build: ./nginx
+    depends_on:
+      - backend
+      - frontend
+    ports:
+      - "8080:80"
+    networks:
+      - app-net
+
+  neo4j:
+    image: neo4j:5.15
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: ${NEO4J_USER}/${NEO4J_PASSWORD}
+      NEO4J_server_memory_pagecache_size: 1G
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    healthcheck:
+      test: ["CMD", "cypher-shell", "system", "info"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    networks:
+      - app-net
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - app-net
+
+networks:
+  app-net:
+    driver: bridge
+
+volumes:
+  neo4j_data:
+  neo4j_logs:
+  ollama_data:
