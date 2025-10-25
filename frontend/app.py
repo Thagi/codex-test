@@ -175,11 +175,12 @@ stat_cols[1].metric("Sessions tracked", session_count or 0)
 stat_cols[2].metric("Graph nodes", node_count)
 stat_cols[3].metric("Graph edges", edge_count)
 
-conversation_tab, memory_tab, graph_tab = st.tabs([
+tab_labels = [
     "💬 Conversation",
     "📝 Memory tools",
     "🕸️ Knowledge graph",
-])
+]
+conversation_tab, memory_tab, graph_tab = st.tabs(tab_labels, key="main_tabs")
 
 with conversation_tab:
     st.subheader("Live conversation")
@@ -199,24 +200,34 @@ with conversation_tab:
         else:
             st.info("Start chatting to populate the short-term memory cache.")
 
+selected_tab_state = st.session_state.get("main_tabs", tab_labels[0])
+if isinstance(selected_tab_state, int):
+    selected_tab = tab_labels[selected_tab_state]
+elif isinstance(selected_tab_state, str) and selected_tab_state in tab_labels:
+    selected_tab = selected_tab_state
+else:
+    selected_tab = tab_labels[0]
+
+user_input = None
+if selected_tab == tab_labels[0]:
     user_input = st.chat_input(f"Message for session '{session_id}'", key="chat_input")
 
-    if user_input:
-        with st.spinner("Sending message..."):
+if user_input:
+    with st.spinner("Sending message..."):
+        try:
+            response = _send_message(session_id, user_input)
+        except requests.RequestException as exc:
+            st.error(f"Failed to send message: {exc}")
+        else:
+            st.session_state.messages = [
+                {"role": msg["role"], "content": msg["content"]}
+                for msg in response.get("short_term_snapshot", [])
+            ]
             try:
-                response = _send_message(session_id, user_input)
+                _refresh_graph()
             except requests.RequestException as exc:
-                st.error(f"Failed to send message: {exc}")
-            else:
-                st.session_state.messages = [
-                    {"role": msg["role"], "content": msg["content"]}
-                    for msg in response.get("short_term_snapshot", [])
-                ]
-                try:
-                    _refresh_graph()
-                except requests.RequestException as exc:
-                    st.warning(f"Graph refresh failed: {exc}")
-                st.rerun()
+                st.warning(f"Graph refresh failed: {exc}")
+            st.rerun()
 
 with memory_tab:
     st.subheader("Consolidate knowledge")
