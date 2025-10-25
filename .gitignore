@@ -10,3 +10,7 @@ __pycache__/
 .streamlit/
 .idea/
 .vscode/
+data/neo4j/data/
+!data/neo4j/data/.gitkeep
+data/neo4j/logs/
+!data/neo4j/logs/.gitkeep

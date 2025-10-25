@@ -1,127 +1,131 @@
 # Graph Memory Chatbot
 
-An AI chatbot that grows smarter through conversations by persisting memories in Neo4j. The system pairs a Streamlit front-end with a FastAPI backend, leverages an Ollama-served `gpt-oss-20b` model for responses, and exposes the experience through an Nginx reverse proxy.
+A conversational assistant that persists memories in Neo4j and lets operators promote insights into long-term knowledge. The stack combines a Streamlit front-end, a FastAPI backend, an Ollama-served `gpt-oss-20b` model, and Nginx as the public entry point.
 
-## Features
-- **Adaptive memory**: Short-term conversation nodes consolidate into long-term knowledge with operator control.
-- **Graph inspection**: Visualize the knowledge graph from the Streamlit UI.
-- **Durable knowledge**: Neo4j stores chat memories on the host filesystem for reuse across container restarts.
-- **Modular services**: Streamlit, FastAPI, Neo4j, and Nginx orchestrated via Podman Compose (Docker Compose compatible). Ollama runs on the host and is consumed via HTTP.
+## System overview
 
-## Architecture
 ```
-[Streamlit] --HTTP--> [Nginx] --> /api --> [FastAPI]
-                                      \-> [Neo4j]
-                                      \-> [Ollama]
-                    \--> /streamlit --> [Streamlit]
+[User] -> [Nginx]
+   ├─ /streamlit/ -> [Streamlit UI]
+   └─ /api/ ------> [FastAPI]
+                       ├─ stores messages in [Neo4j]
+                       └─ generates replies via [Ollama]
 ```
 
-Short-term memory stores individual exchanges linked as a path; a manual consolidation step triggers the LLM to summarize the dialogue and create long-term knowledge nodes.
+### Core capabilities
 
-## Getting Started
+- **Chat orchestration** – the `/api/chat` endpoint records every exchange in short-term memory and streams replies from Ollama back to the UI.
+- **Operator-driven consolidation** – a Streamlit action calls `/api/memory/consolidate` to summarize recent dialogue into a `Knowledge` node, linking contributing messages for provenance.
+- **Graph insight** – `/api/graph` exposes all nodes and edges so the front-end can render the knowledge graph with PyVis.
+- **Resilient storage** – when Neo4j is unreachable the memory service falls back to an in-process cache, allowing conversations to continue and graph visualisation to work with synthetic nodes until connectivity returns.
 
-### Prerequisites
-- Podman & podman-compose
+## Getting started
+
+### 1. Prerequisites
+
+- Podman + `podman-compose` (or Docker + `docker compose`)
+- Ollama installed on the host machine with the `gpt-oss-20b` model pulled
 - (Optional) Python 3.11 for local development without containers
 
-### Configuration
-Copy `.env.example` to `.env` and adjust values as needed:
+### 2. Configure environment variables
+
+Copy the sample file and tweak as needed:
+
 ```bash
 cp .env.example .env
 ```
 
-The sample configuration defaults `NEO4J_URI` to `bolt://neo4j:7687` so the
-backend connects directly to the single Neo4j instance without attempting
-routing-table discovery (which can trigger `Unable to retrieve routing
-information` errors). If you already have a `.env` with `neo4j://...`, the
-backend now normalizes it to the bolt equivalent automatically.
+Key variables:
 
-> **Password reminder:** Neo4j 5+ rejects the default password `neo4j`.
-> The sample `.env` ships with `NEO4J_PASSWORD=neo4j_dev_password`; pick your
-> own secret but avoid `neo4j`, and keep the `NEO4J_AUTH` entry in
-> `docker-compose.yml` (or your deployment manifests) in sync.
+- `NEO4J_URI` defaults to `bolt://neo4j:7687`. The backend normalizes any `neo4j://` URI to `bolt://` to avoid routing-table errors with single-instance deployments.
+- `OLLAMA_BASE_URL` should point to your host runtime. Podman users can keep `http://host.containers.internal:11434`; Docker users typically need `http://host.docker.internal:11434`.
+- `NEO4J_USER` / `NEO4J_PASSWORD` must match the credentials supplied to the Neo4j container in `docker-compose.yml`.
 
-### Ollama setup
-Run Ollama separately on the host machine and make sure the `gpt-oss-20b` model is available:
+> **Neo4j password tip:** Neo4j 5+ blocks the default password `neo4j`. The example file uses `neo4j_dev_password`; update both `.env` and the compose file together when changing it.
+
+### 3. Prepare Ollama
+
+Run Ollama outside the compose stack and ensure the target model is available:
+
 ```bash
 ollama pull gpt-oss-20b
 ollama serve
 ```
 
-With Podman the containers can reach the host via `http://host.containers.internal`. The default `.env` points `OLLAMA_BASE_URL` to `http://host.containers.internal:11434` so no additional networking tweaks are required.
+Containers connect to the host runtime via the `OLLAMA_BASE_URL` you configured.
 
-> **Using Docker instead of Podman?** Update `OLLAMA_BASE_URL` to `http://host.docker.internal:11434` in your `.env` file so the backend can reach the host Ollama instance.
+### 4. Launch the stack
 
-### Run with Podman Compose
 ```bash
 make compose-up
 ```
-Visit `http://localhost:8080/streamlit/` for the UI and `http://localhost:8080/api/docs` for backend API docs.
 
-Stop the stack with:
+Visit:
+
+- `http://localhost:8080/streamlit/` – Streamlit UI
+- `http://localhost:8080/api/docs` – FastAPI interactive docs
+
+Shut everything down with:
+
 ```bash
 make compose-down
 ```
 
-> **Tip:** Set `COMPOSE_CMD=docker-compose` when running `make compose-up` or `make compose-down` if you prefer Docker Compose.
+Set `COMPOSE_CMD=docker-compose` if you prefer Docker over Podman; the make targets respect the override.
 
-### Neo4j data persistence
+### 5. Persisted Neo4j volumes
 
-- Neo4j binds its `/data` and `/logs` directories to `./data/neo4j/data` and `./data/neo4j/logs` in this repository.
-- Because the data lives on the host filesystem, `make compose-down` (or `docker compose down`) does **not** delete your knowledge graph.
-- To reset the graph intentionally, either:
-  - use the **Clear graph** danger-zone control in the Streamlit UI's *Knowledge graph* tab, or
-  - call `DELETE /api/graph` manually, or
-  - delete the `data/neo4j/` directory before restarting the stack.
+- Neo4j mounts host directories under `./data/neo4j/`, so compose shutdowns do **not** delete prior knowledge.
+- Reset the graph using the Streamlit danger-zone control, `DELETE /api/graph`, or by removing the `data/neo4j/` directory before restarting.
 
-### Local Development
-Install backend dependencies:
+## Local development
+
+Create isolated virtual environments and run services directly:
+
 ```bash
 make install-backend
-```
-Run the backend:
-```bash
 BACKEND_PORT=8000 make dev-backend
-```
 
-Install frontend dependencies:
-```bash
 make install-frontend
-```
-Run the frontend:
-```bash
 FRONTEND_PORT=8501 make dev-frontend
 ```
 
-Set environment variables (`NEO4J_URI`, `OLLAMA_BASE_URL`, etc.) when running services locally.
+The backend exposes a FastAPI app at `/api` and depends on running Neo4j + Ollama instances. The Streamlit app uses `BACKEND_URL` (default `http://backend:8000/api`) to talk to the API.
+
+## Backend details
+
+- **Configuration** – `backend/app/core/config.py` reads environment variables via Pydantic settings and caches a singleton instance per process.
+- **Service wiring** – dependency helpers in `backend/app/api/routes.py` create singletons for the `GraphMemoryService` and `OllamaClient`, ensuring connections are shared for the process lifetime.
+- **Fallback behaviour** – the memory service stores recent messages in Neo4j and mirrors them in a TTL-based in-memory list when the database is unreachable, enabling uninterrupted chat sessions.
+- **Graph export** – `/api/graph` returns serialised nodes/edges by walking the Neo4j result or the fallback cache, preserving metadata for the front-end visualisation.
+
+## Frontend details
+
+- The Streamlit UI keeps session state for chat history, graph data, and live metrics. Messages are rendered via `st.chat_message`, and the chat input is kept outside tab layouts to comply with Streamlit constraints.
+- Graph rendering uses PyVis, exposing node metadata tooltips and providing refresh / reset controls inside the “Knowledge graph” tab.
+- Operators can add optional notes during consolidation; successful summaries are surfaced back in the UI before the graph refreshes.
 
 ## Testing
-(Add tests under `backend/tests/` and invoke them via `pytest` once implemented.)
 
-## Memory Model Overview
-- **Short-term** (`ShortTermMessage` nodes): capture sequential chat messages with TTL.
-- **Long-term** (`Knowledge` nodes): created via consolidation, linked back to contributing short-term messages.
-- **Relationships**:
-  - `(:ChatSession)-[:HAS_MESSAGE]->(:ShortTermMessage)`
-  - `(:ShortTermMessage)-[:NEXT]->(:ShortTermMessage)` for chronology
-  - `(:ShortTermMessage)-[:CONTRIBUTED_TO]->(:Knowledge)` to trace learning provenance
-  - `(:ChatSession)-[:YIELDED]->(:Knowledge)` summarizing session learnings
+Backend unit tests live under `backend/tests/`. Execute them with:
 
-## Graph Visualization
-The Streamlit app fetches `/api/graph` and renders nodes/edges via PyVis.
-
-- Use the "Refresh graph" control in the *Knowledge graph* tab to pull the latest structure.
-- Inspect raw JSON under the "Raw graph data" expander.
-- The "Clear graph" expander provides a guarded action to wipe stored memories when needed.
-
-## Folder Structure
-```
-backend/   # FastAPI service
-frontend/  # Streamlit app
-nginx/     # Reverse proxy configuration
+```bash
+pytest backend/tests
 ```
 
-## Next Steps
-- Add automated tests for Neo4j interactions using test containers or mocks.
-- Implement background cleanup of expired short-term nodes.
-- Extend long-term consolidation with richer LLM prompts and embeddings.
+The existing suite verifies configuration defaults; extend it as services evolve.
+
+## Repository structure
+
+```
+backend/   # FastAPI application code, services, and tests
+frontend/  # Streamlit UI
+nginx/     # Reverse proxy configuration for /api and /streamlit
+data/      # Persisted Neo4j volumes (created after first run)
+```
+
+## Roadmap ideas
+
+- Add integration tests for Neo4j graph mutations and Ollama prompts using mocks or containers.
+- Expose long-term knowledge retrieval in the chat prompt to ground responses.
+- Enhance the graph panel with filtering (per session / node type) and live WebSocket updates.
