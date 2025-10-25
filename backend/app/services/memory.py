@@ -9,7 +9,7 @@ from typing import AsyncIterator, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from neo4j import AsyncDriver, AsyncGraphDatabase, AsyncSession
-from neo4j.exceptions import Neo4jError
+from neo4j.exceptions import Neo4jError, ServiceUnavailable
 
 from ..models.chat import ChatMessage, GraphEdge, GraphNode
 
@@ -106,7 +106,7 @@ class GraphMemoryService:
             async with self.session() as neo_session:
                 result = await neo_session.run(query, parameters)
                 await result.consume()
-        except Neo4jError:
+        except (Neo4jError, ServiceUnavailable):
             self._record_fallback(
                 MemoryRecord(
                     session_id=session_id,
@@ -144,7 +144,7 @@ class GraphMemoryService:
                         )
                 )
                 return records
-        except Neo4jError:
+        except (Neo4jError, ServiceUnavailable):
             fallback_messages = [
                 ChatMessage(role=rec.role, content=rec.content, timestamp=rec.timestamp)
                 for rec in sorted(self._fallback_records, key=lambda r: r.timestamp)
@@ -184,7 +184,7 @@ class GraphMemoryService:
                     notes=notes,
                 )
                 await result.consume()
-        except Neo4jError:
+        except (Neo4jError, ServiceUnavailable):
             # fallback: just keep a memory record for display
             self._record_fallback(
                 MemoryRecord(
@@ -208,7 +208,7 @@ class GraphMemoryService:
             async with self.session() as neo_session:
                 result = await neo_session.run(query)
                 record = await result.single()
-        except Neo4jError:
+        except (Neo4jError, ServiceUnavailable):
             self._prune_fallback_records()
             nodes: List[GraphNode] = []
             edges: List[GraphEdge] = []
