@@ -82,7 +82,7 @@ st.markdown(
         }
         .main .block-container {
             padding-top: 1.5rem;
-            padding-bottom: 2rem;
+            padding-bottom: 6rem;
             max-width: 1200px;
         }
         div[data-testid="stSidebar"] {
@@ -199,6 +199,25 @@ with conversation_tab:
         else:
             st.info("Start chatting to populate the short-term memory cache.")
 
+    user_input = st.chat_input(f"Message for session '{session_id}'", key="chat_input")
+
+    if user_input:
+        with st.spinner("Sending message..."):
+            try:
+                response = _send_message(session_id, user_input)
+            except requests.RequestException as exc:
+                st.error(f"Failed to send message: {exc}")
+            else:
+                st.session_state.messages = [
+                    {"role": msg["role"], "content": msg["content"]}
+                    for msg in response.get("short_term_snapshot", [])
+                ]
+                try:
+                    _refresh_graph()
+                except requests.RequestException as exc:
+                    st.warning(f"Graph refresh failed: {exc}")
+                st.rerun()
+
 with memory_tab:
     st.subheader("Consolidate knowledge")
     st.caption("Summarize recent exchanges into long-term knowledge nodes.")
@@ -278,22 +297,3 @@ with graph_tab:
                     st.success("Graph cleared. Existing chat sessions will start fresh.")
                     st.session_state.graph_data = {"nodes": [], "edges": []}
                     st.rerun()
-
-user_input = st.chat_input(f"Message for session '{session_id}'", key="chat_input")
-
-if user_input:
-    with st.spinner("Sending message..."):
-        try:
-            response = _send_message(session_id, user_input)
-        except requests.RequestException as exc:
-            st.error(f"Failed to send message: {exc}")
-        else:
-            st.session_state.messages = [
-                {"role": msg["role"], "content": msg["content"]}
-                for msg in response.get("short_term_snapshot", [])
-            ]
-            try:
-                _refresh_graph()
-            except requests.RequestException as exc:
-                st.warning(f"Graph refresh failed: {exc}")
-            st.rerun()
