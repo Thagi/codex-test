@@ -348,6 +348,18 @@ class GraphMemoryService:
                 )
         return nodes, edges
 
+    async def clear_graph(self) -> None:
+        """Remove all nodes and relationships from the graph store."""
+
+        try:
+            async with self.session() as neo_session:
+                await neo_session.run("MATCH (n) DETACH DELETE n")
+        except FALLBACK_EXCEPTIONS:
+            # Reset the in-memory cache when the backing store is unavailable
+            self._fallback_records.clear()
+        else:
+            self._fallback_records.clear()
+
     async def close(self) -> None:
         """Close driver connections and cleanup."""
 
