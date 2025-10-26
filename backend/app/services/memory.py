@@ -366,11 +366,17 @@ class GraphMemoryService:
         await self._driver.close()
 
 
-async def generate_summary(messages: List[ChatMessage], ollama_client) -> str:
+async def generate_summary(
+    messages: List[ChatMessage],
+    ollama_client,
+    *,
+    max_tokens: int | None = None,
+) -> str:
     """Create a summary of chat messages using the Ollama client."""
 
     prompt_lines = ["Summarize the following conversation focusing on stable knowledge."]
     for msg in messages:
         prompt_lines.append(f"{msg.role}: {msg.content}")
     prompt = "\n".join(prompt_lines)
-    return await ollama_client.generate(prompt)
+    options = {"num_predict": max_tokens} if max_tokens and max_tokens > 0 else None
+    return await ollama_client.generate(prompt, options=options)

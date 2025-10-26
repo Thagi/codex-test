@@ -42,6 +42,8 @@ Key variables:
 - `OLLAMA_BASE_URL` should point to your host runtime. Podman users can keep `http://host.containers.internal:11434`; Docker users typically need `http://host.docker.internal:11434`.
 - `NEO4J_USER` / `NEO4J_PASSWORD` must match the credentials supplied to the Neo4j container in `docker-compose.yml`.
 - `SIMULATION_TIMEOUT_SECONDS` caps how long GPT-to-GPT simulations may run before the backend cancels the job. Leave it unset (the default) to allow simulations to run to completion, or provide a value in seconds to enable the guardrail when needed.
+- `SIMULATION_MAX_TOKENS_PER_MESSAGE` limits the number of tokens each simulated agent reply (and the summary) may generate. This keeps long-form models from stalling runs with multi-minute outputs; set it to `0` to disable the cap entirely.
+- `SIMULATION_GENERATION_TIMEOUT_SECONDS` enforces a timeout on each individual Ollama call made during simulations. Set it to `0` to disable the safeguard if you expect extremely long generations.
 
 > **Neo4j password tip:** Neo4j 5+ blocks the default password `neo4j`. The example file uses `neo4j_dev_password`; update both `.env` and the compose file together when changing it.
 

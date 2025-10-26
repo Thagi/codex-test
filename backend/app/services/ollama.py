@@ -14,7 +14,13 @@ class OllamaClient:
         self._model = model
         self._client = httpx.AsyncClient(base_url=self._base_url, timeout=60.0)
 
-    async def generate(self, prompt: str, context: list[dict[str, Any]] | None = None) -> str:
+    async def generate(
+        self,
+        prompt: str,
+        *,
+        context: list[dict[str, Any]] | None = None,
+        options: Dict[str, Any] | None = None,
+    ) -> str:
         """Call the Ollama chat endpoint and return the generated text."""
 
         payload: Dict[str, Any] = {
@@ -24,6 +30,8 @@ class OllamaClient:
         }
         if context:
             payload["context"] = context
+        if options:
+            payload["options"] = options
         response = await self._client.post("/api/generate", json=payload)
         response.raise_for_status()
         data = response.json()

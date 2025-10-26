@@ -59,6 +59,8 @@ def get_simulation_coordinator() -> SimulationCoordinator:
     if not hasattr(get_simulation_coordinator, "_instance"):
         get_simulation_coordinator._instance = SimulationCoordinator(  # type: ignore[attr-defined]
             timeout_seconds=settings.simulation_timeout_seconds,
+            max_tokens_per_message=settings.simulation_max_tokens_per_message,
+            generation_timeout_seconds=settings.simulation_generation_timeout_seconds,
         )
     return get_simulation_coordinator._instance  # type: ignore[attr-defined]
 

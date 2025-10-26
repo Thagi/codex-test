@@ -8,6 +8,7 @@ __pycache__/
 .env.local
 .pytest_cache/
 .streamlit/
+!frontend/.streamlit/
 .idea/
 .vscode/
 data/neo4j/data/

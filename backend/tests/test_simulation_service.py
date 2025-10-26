@@ -18,7 +18,7 @@ class DummyOllamaClient:
     def __init__(self) -> None:
         self._call_count = 0
 
-    async def generate(self, prompt: str):  # pragma: no cover - interface contract
+    async def generate(self, prompt: str, **_: object):  # pragma: no cover - interface contract
         self._call_count += 1
         return f"response-{self._call_count}"
 
@@ -43,7 +43,7 @@ async def test_run_simulation_returns_graph(monkeypatch):
         ],
     )
 
-    async def fake_summary(messages, _client):  # type: ignore[no-untyped-def]
+    async def fake_summary(messages, _client, **_: object):  # type: ignore[no-untyped-def]
         return "Synthetic summary"
 
     monkeypatch.setattr(simulation_service, "generate_summary", fake_summary)
@@ -70,6 +70,40 @@ async def test_run_simulation_returns_graph(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_run_simulation_applies_token_limit():
+    """Supplying a token cap should forward the limit to each Ollama invocation."""
+
+    request = SimulationRequest(
+        turns=1,
+        participants=[
+            SimulationParticipant(role="Engineer"),
+            SimulationParticipant(role="Strategist"),
+        ],
+    )
+
+    class CaptureOllama:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object] | None] = []
+
+        async def generate(self, prompt: str, **kwargs: object) -> str:  # pragma: no cover - stub behaviour
+            self.calls.append(kwargs.get("options"))
+            return "ok"
+
+    ollama_stub = CaptureOllama()
+    transcript, summary, _ = await simulation_service.run_simulation(
+        request,
+        ollama_stub,
+        max_tokens_per_message=128,
+    )
+
+    assert transcript  # ensure replies were recorded
+    assert summary == "ok"
+    assert ollama_stub.calls
+    for options in ollama_stub.calls:
+        assert options == {"num_predict": 128}
+
+
+@pytest.mark.anyio
 async def test_simulation_coordinator_executes_job(monkeypatch):
     """Simulation jobs should complete asynchronously and expose their result."""
 
@@ -82,7 +116,7 @@ async def test_simulation_coordinator_executes_job(monkeypatch):
         ],
     )
 
-    async def fake_summary(messages, _client):  # type: ignore[no-untyped-def]
+    async def fake_summary(messages, _client, **_: object):  # type: ignore[no-untyped-def]
         return "Synthetic summary"
 
     monkeypatch.setattr(simulation_service, "generate_summary", fake_summary)
@@ -119,13 +153,13 @@ async def test_simulation_coordinator_allows_long_jobs_when_no_timeout(monkeypat
         ],
     )
 
-    async def fake_summary(messages, _client):  # type: ignore[no-untyped-def]
+    async def fake_summary(messages, _client, **_: object):  # type: ignore[no-untyped-def]
         return "Summary"
 
     monkeypatch.setattr(simulation_service, "generate_summary", fake_summary)
 
     class SlowButCompletes:
-        async def generate(self, prompt: str) -> str:  # pragma: no cover - stub behaviour
+        async def generate(self, prompt: str, **_: object) -> str:  # pragma: no cover - stub behaviour
             await anyio.sleep(0.05)
             return "slow-response"
 
@@ -157,7 +191,7 @@ async def test_simulation_coordinator_surfaces_errors():
     )
 
     class FailingOllamaClient:
-        async def generate(self, prompt: str) -> str:  # pragma: no cover - stub behaviour
+        async def generate(self, prompt: str, **_: object) -> str:  # pragma: no cover - stub behaviour
             raise RuntimeError("ollama unavailable")
 
     coordinator = simulation_service.SimulationCoordinator()
@@ -187,13 +221,13 @@ async def test_simulation_coordinator_times_out_long_jobs(monkeypatch):
         ],
     )
 
-    async def fake_summary(messages, _client):  # type: ignore[no-untyped-def]
+    async def fake_summary(messages, _client, **_: object):  # type: ignore[no-untyped-def]
         return "Summary"
 
     monkeypatch.setattr(simulation_service, "generate_summary", fake_summary)
 
     class SlowOllamaClient:
-        async def generate(self, prompt: str) -> str:  # pragma: no cover - stub behaviour
+        async def generate(self, prompt: str, **_: object) -> str:  # pragma: no cover - stub behaviour
             await anyio.sleep(0.2)
             return "slow-response"
 
@@ -210,6 +244,46 @@ async def test_simulation_coordinator_times_out_long_jobs(monkeypatch):
 
     assert job.error is not None
     assert "exceeded" in job.error.lower()
+
+
+@pytest.mark.anyio
+async def test_simulation_coordinator_times_out_stalled_generation(monkeypatch):
+    """Individual Ollama calls should fail fast when they overrun the generation timeout."""
+
+    request = SimulationRequest(
+        turns=1,
+        participants=[
+            SimulationParticipant(role="Scientist"),
+            SimulationParticipant(role="Strategist"),
+        ],
+    )
+
+    async def fake_summary(messages, _client, **_: object) -> str:  # type: ignore[no-untyped-def]
+        return "Summary"
+
+    monkeypatch.setattr(simulation_service, "generate_summary", fake_summary)
+
+    class StuckOllamaClient:
+        async def generate(self, prompt: str, **_: object) -> str:  # pragma: no cover - stub behaviour
+            await anyio.sleep(0.2)
+            return "slow-response"
+
+    coordinator = simulation_service.SimulationCoordinator(
+        generation_timeout_seconds=0.05
+    )
+    job = await coordinator.start_simulation(request, StuckOllamaClient())
+
+    for _ in range(100):
+        job = await coordinator.get_job(job.job_id)
+        if job.status is SimulationJobStatus.FAILED:
+            break
+        await anyio.sleep(0.01)
+    else:  # pragma: no cover - defensive branch
+        pytest.fail("Simulation job did not fail when generation exceeded the timeout")
+
+    assert job.error is not None
+    assert "timed out" in job.error.lower()
+    assert "Scientist" in job.error
 
 
 @pytest.mark.anyio
@@ -234,7 +308,7 @@ async def test_simulation_coordinator_cancels_stalled_jobs(monkeypatch):
     monkeypatch.setattr(simulation_service, "generate_summary", fake_summary)
 
     class StallingOllamaClient:
-        async def generate(self, prompt: str) -> str:  # pragma: no cover - stub behaviour
+        async def generate(self, prompt: str, **_: object) -> str:  # pragma: no cover - stub behaviour
             await anyio.sleep(0.2)
             return "slow-response"
 
