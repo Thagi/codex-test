@@ -1,13 +1,21 @@
 """Utility functions powering GPT-to-GPT simulations."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+import asyncio
+from contextlib import suppress
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Iterable, List, Tuple
+from typing import Dict, Iterable, List, Tuple
 from uuid import uuid4
 
 from ..models.chat import ChatMessage, GraphEdge, GraphNode, GraphSnapshot
-from ..models.simulation import SimulationParticipant, SimulationRequest
+from ..models.simulation import (
+    SimulationJob,
+    SimulationJobStatus,
+    SimulationParticipant,
+    SimulationRequest,
+    SimulationResponse,
+)
 from .memory import generate_summary
 from .ollama import OllamaClient
 
@@ -142,6 +150,10 @@ def _build_simulation_graph(
     return GraphSnapshot(nodes=nodes, edges=edges)
 
 
+class SimulationError(RuntimeError):
+    """Raised when a simulation cannot be completed successfully."""
+
+
 async def run_simulation(
     request: SimulationRequest, ollama_client: OllamaClient
 ) -> Tuple[List[ChatMessage], str, GraphSnapshot]:
@@ -153,9 +165,105 @@ async def run_simulation(
     for _ in range(request.turns):
         for participant in request.participants:
             prompt = _build_prompt(prompt_context, participant)
-            reply = await ollama_client.generate(prompt)
+            try:
+                reply = await ollama_client.generate(prompt)
+            except Exception as exc:  # pragma: no cover - surface backend failure
+                raise SimulationError(
+                    f"Failed to generate a reply for role '{participant.role}'."
+                ) from exc
             transcript.append(ChatMessage(role=participant.role, content=reply))
 
-    summary = await generate_summary(transcript, ollama_client)
+    try:
+        summary = await generate_summary(transcript, ollama_client)
+    except Exception as exc:  # pragma: no cover - surface backend failure
+        raise SimulationError("Failed to summarize simulated conversation.") from exc
+
     graph = _build_simulation_graph(request, transcript, summary)
     return transcript, summary, graph
+
+
+@dataclass(slots=True)
+class _SimulationJobState:
+    """Internal representation of a simulation job's state."""
+
+    job_id: str
+    request: SimulationRequest
+    status: SimulationJobStatus = SimulationJobStatus.PENDING
+    result: SimulationResponse | None = None
+    error: str | None = None
+    task: asyncio.Task[None] | None = field(default=None, repr=False)
+
+
+class SimulationCoordinator:
+    """Manage asynchronous execution and retrieval of simulation jobs."""
+
+    def __init__(self) -> None:
+        self._jobs: Dict[str, _SimulationJobState] = {}
+        self._lock = asyncio.Lock()
+
+    async def start_simulation(
+        self, request: SimulationRequest, ollama_client: OllamaClient
+    ) -> SimulationJob:
+        """Enqueue a simulation job and begin execution in the background."""
+
+        job_id = f"sim-job-{uuid4()}"
+        state = _SimulationJobState(job_id=job_id, request=request)
+        async with self._lock:
+            self._jobs[job_id] = state
+        state.task = asyncio.create_task(self._execute_job(state, ollama_client))
+        return await self.get_job(job_id)
+
+    async def get_job(self, job_id: str) -> SimulationJob:
+        """Return a snapshot of the requested job's state."""
+
+        async with self._lock:
+            state = self._jobs.get(job_id)
+            if state is None:
+                raise KeyError(job_id)
+            return self._snapshot_job(state)
+
+    async def _execute_job(
+        self, state: _SimulationJobState, ollama_client: OllamaClient
+    ) -> None:
+        """Run the simulation and store the results on the job state."""
+
+        async with self._lock:
+            state.status = SimulationJobStatus.RUNNING
+
+        try:
+            transcript, summary, graph = await run_simulation(state.request, ollama_client)
+        except Exception as exc:  # pragma: no cover - defensive programming
+            async with self._lock:
+                state.status = SimulationJobStatus.FAILED
+                state.error = str(exc)
+            return
+
+        result = SimulationResponse(messages=transcript, summary=summary, graph=graph)
+        async with self._lock:
+            state.status = SimulationJobStatus.COMPLETED
+            state.result = result
+
+    async def shutdown(self) -> None:
+        """Cancel any in-flight jobs during application shutdown."""
+
+        async with self._lock:
+            tasks = [job.task for job in self._jobs.values() if job.task is not None]
+        for task in tasks:
+            if task is None:
+                continue
+            if task.done():
+                continue
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+    @staticmethod
+    def _snapshot_job(state: _SimulationJobState) -> SimulationJob:
+        """Convert an internal job state to its API representation."""
+
+        return SimulationJob(
+            job_id=state.job_id,
+            status=state.status,
+            result=state.result,
+            error=state.error,
+        )

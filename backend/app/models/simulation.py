@@ -1,6 +1,7 @@
 """Pydantic models describing GPT-to-GPT simulation payloads."""
 from __future__ import annotations
 
+from enum import Enum
 from typing import List, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -50,6 +51,41 @@ class SimulationResponse(BaseModel):
     messages: List[ChatMessage]
     summary: str
     graph: GraphSnapshot
+
+
+class SimulationJobStatus(str, Enum):
+    """Enumerates lifecycle states for a simulation job."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class SimulationStartResponse(BaseModel):
+    """Response returned when a simulation job is enqueued."""
+
+    job_id: str = Field(description="Identifier assigned to the simulation job")
+    status: SimulationJobStatus = Field(
+        description="Current lifecycle state of the job",
+    )
+
+
+class SimulationJob(BaseModel):
+    """Detailed status information for a simulation job."""
+
+    job_id: str = Field(description="Identifier assigned to the simulation job")
+    status: SimulationJobStatus = Field(
+        description="Current lifecycle state of the job",
+    )
+    result: Optional[SimulationResponse] = Field(
+        default=None,
+        description="Simulation payload available when the job completes successfully.",
+    )
+    error: Optional[str] = Field(
+        default=None,
+        description="Error message explaining why the job failed, when applicable.",
+    )
 
 
 class SimulationCommitRequest(BaseModel):

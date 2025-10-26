@@ -15,12 +15,13 @@ from ..models.chat import (
 from ..models.simulation import (
     SimulationCommitRequest,
     SimulationCommitResponse,
+    SimulationJob,
     SimulationRequest,
-    SimulationResponse,
+    SimulationStartResponse,
 )
 from ..services.memory import GraphMemoryService, generate_summary
 from ..services.ollama import OllamaClient
-from ..services.simulation import run_simulation
+from ..services.simulation import SimulationCoordinator
 
 router = APIRouter()
 
@@ -49,6 +50,14 @@ def get_ollama_client() -> OllamaClient:
             model=settings.ollama_model,
         )
     return get_ollama_client._instance  # type: ignore[attr-defined]
+
+
+def get_simulation_coordinator() -> SimulationCoordinator:
+    """Dependency returning the simulation coordinator singleton."""
+
+    if not hasattr(get_simulation_coordinator, "_instance"):
+        get_simulation_coordinator._instance = SimulationCoordinator()  # type: ignore[attr-defined]
+    return get_simulation_coordinator._instance  # type: ignore[attr-defined]
 
 
 @router.get("/health", tags=["system"])
@@ -128,15 +137,31 @@ async def clear_graph(
     return {"status": "graph cleared"}
 
 
-@router.post("/simulation/run", response_model=SimulationResponse, tags=["simulation"])
+@router.post("/simulation/run", response_model=SimulationStartResponse, tags=["simulation"])
 async def simulation_run(
     payload: SimulationRequest,
+    coordinator: SimulationCoordinator = Depends(get_simulation_coordinator),
     ollama_client: OllamaClient = Depends(get_ollama_client),
-) -> SimulationResponse:
-    """Run a GPT-to-GPT conversation without mutating stored knowledge."""
+) -> SimulationStartResponse:
+    """Enqueue a GPT-to-GPT conversation without mutating stored knowledge."""
 
-    transcript, summary, graph = await run_simulation(payload, ollama_client)
-    return SimulationResponse(messages=transcript, summary=summary, graph=graph)
+    job = await coordinator.start_simulation(payload, ollama_client)
+    return SimulationStartResponse(job_id=job.job_id, status=job.status)
+
+
+@router.get(
+    "/simulation/run/{job_id}", response_model=SimulationJob, tags=["simulation"]
+)
+async def simulation_status(
+    job_id: str,
+    coordinator: SimulationCoordinator = Depends(get_simulation_coordinator),
+) -> SimulationJob:
+    """Return the current status (and result, if available) for a simulation job."""
+
+    try:
+        return await coordinator.get_job(job_id)
+    except KeyError as exc:  # pragma: no cover - defensive branch
+        raise HTTPException(status_code=404, detail=f"Simulation job {job_id} not found") from exc
 
 
 @router.post(

@@ -1,9 +1,14 @@
 """Tests for the GPT-to-GPT simulation helpers."""
 from __future__ import annotations
 
+import anyio
 import pytest
 
-from backend.app.models.simulation import SimulationParticipant, SimulationRequest
+from backend.app.models.simulation import (
+    SimulationJobStatus,
+    SimulationParticipant,
+    SimulationRequest,
+)
 from backend.app.services import simulation as simulation_service
 
 
@@ -62,3 +67,71 @@ async def test_run_simulation_returns_graph(monkeypatch):
 
     # The Ollama stub should be invoked once per generated message
     assert ollama_stub._call_count == expected_message_count
+
+
+@pytest.mark.anyio
+async def test_simulation_coordinator_executes_job(monkeypatch):
+    """Simulation jobs should complete asynchronously and expose their result."""
+
+    request = SimulationRequest(
+        turns=1,
+        context="Discuss battery recycling best practices.",
+        participants=[
+            SimulationParticipant(role="Scientist", persona="Loves experiments."),
+            SimulationParticipant(role="Policy Maker", persona="Focus on regulations."),
+        ],
+    )
+
+    async def fake_summary(messages, _client):  # type: ignore[no-untyped-def]
+        return "Synthetic summary"
+
+    monkeypatch.setattr(simulation_service, "generate_summary", fake_summary)
+
+    ollama_stub = DummyOllamaClient()
+    coordinator = simulation_service.SimulationCoordinator()
+
+    job = await coordinator.start_simulation(request, ollama_stub)
+    assert job.status == SimulationJobStatus.PENDING
+
+    for _ in range(100):
+        job = await coordinator.get_job(job.job_id)
+        if job.status is SimulationJobStatus.COMPLETED:
+            break
+        await anyio.sleep(0.01)
+    else:  # pragma: no cover - defensive branch
+        pytest.fail("Simulation job did not complete in time")
+
+    assert job.result is not None
+    assert job.result.summary == "Synthetic summary"
+    assert len(job.result.messages) == request.turns * len(request.participants)
+
+
+@pytest.mark.anyio
+async def test_simulation_coordinator_surfaces_errors():
+    """Failures during generation should propagate to the job status."""
+
+    request = SimulationRequest(
+        turns=1,
+        participants=[
+            SimulationParticipant(role="Engineer"),
+            SimulationParticipant(role="Strategist"),
+        ],
+    )
+
+    class FailingOllamaClient:
+        async def generate(self, prompt: str) -> str:  # pragma: no cover - stub behaviour
+            raise RuntimeError("ollama unavailable")
+
+    coordinator = simulation_service.SimulationCoordinator()
+    job = await coordinator.start_simulation(request, FailingOllamaClient())
+
+    for _ in range(100):
+        job = await coordinator.get_job(job.job_id)
+        if job.status is SimulationJobStatus.FAILED:
+            break
+        await anyio.sleep(0.01)
+    else:  # pragma: no cover - defensive branch
+        pytest.fail("Simulation job did not fail in time")
+
+    assert job.error is not None
+    assert "Engineer" in job.error

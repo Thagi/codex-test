@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from typing import Any, Dict, List
 
 import requests
@@ -54,14 +55,37 @@ def _load_short_term_history(session_id: str) -> tuple[list[dict] | None, str | 
     return None, f"Could not load short-term history (status {response.status_code})"
 
 
-def _run_simulation(config: Dict[str, Any]) -> Dict[str, Any]:
+def _start_simulation(config: Dict[str, Any]) -> Dict[str, Any]:
     response = requests.post(
         f"{BACKEND_URL}/simulation/run",
         json=config,
-        timeout=120,
+        timeout=30,
     )
     response.raise_for_status()
     return response.json()
+
+
+def _poll_simulation(job_id: str) -> Dict[str, Any]:
+    response = requests.get(
+        f"{BACKEND_URL}/simulation/run/{job_id}",
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def _await_simulation(job_id: str, *, timeout: int = 300, poll_interval: float = 2.0) -> Dict[str, Any]:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        status = _poll_simulation(job_id)
+        state = status.get("status")
+        if state == "completed":
+            return status.get("result", {})
+        if state == "failed":
+            message = status.get("error") or "Simulation failed"
+            raise RuntimeError(message)
+        time.sleep(poll_interval)
+    raise TimeoutError("Simulation did not finish before the timeout elapsed")
 
 
 def _commit_simulation(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -356,12 +380,27 @@ def render_simulation_page() -> None:
             }
             with st.spinner("Running multi-agent simulation..."):
                 try:
-                    result = _run_simulation(payload)
+                    start_response = _start_simulation(payload)
                 except requests.RequestException as exc:
-                    st.error(f"Simulation failed: {exc}")
+                    st.error(f"Simulation failed to start: {exc}")
                 else:
-                    st.session_state.simulation_result = result
-                    st.success("Simulation complete. Review the transcript and graph below.")
+                    job_id = start_response.get("job_id")
+                    if not job_id:
+                        st.error("Simulation did not return a job identifier.")
+                    else:
+                        try:
+                            result = _await_simulation(job_id)
+                        except requests.RequestException as exc:
+                            st.error(f"Simulation polling failed: {exc}")
+                        except TimeoutError as exc:
+                            st.error(str(exc))
+                        except RuntimeError as exc:
+                            st.error(f"Simulation failed: {exc}")
+                        else:
+                            st.session_state.simulation_result = result
+                            st.success(
+                                "Simulation complete. Review the transcript and graph below."
+                            )
 
     simulation_result = st.session_state.get("simulation_result")
     if simulation_result:
