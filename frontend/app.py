@@ -337,20 +337,38 @@ def render_simulation_page() -> None:
             {"role": "Agent 2", "persona": ""},
         ]
 
-    context = st.text_area(
-        "Scenario / topic",
-        placeholder="Outline the theme, goal, or problem the agents should discuss...",
-        key="simulation_context",
-    )
-    turns = st.slider(
-        "Number of turns",
-        min_value=1,
-        max_value=10,
-        value=st.session_state.get("simulation_turns", 3),
-        key="simulation_turns",
+    setup_cols = st.columns((2, 1))
+    with setup_cols[0]:
+        context = st.text_area(
+            "Scenario / topic",
+            placeholder="Outline the theme, goal, or problem the agents should discuss...",
+            key="simulation_context",
+            height=160,
+        )
+    with setup_cols[1]:
+        turns = st.slider(
+            "Number of turns",
+            min_value=1,
+            max_value=10,
+            value=st.session_state.get("simulation_turns", 3),
+            key="simulation_turns",
+        )
+        st.caption(
+            "Longer runs provide richer transcripts but will take more time to generate."
+        )
+
+    stats_cols = st.columns(3)
+    stats_cols[0].metric("Configured agents", len(st.session_state.simulation_participants))
+    stats_cols[1].metric("Planned turns", st.session_state.get("simulation_turns", 3))
+    stats_cols[2].metric(
+        "Scenario length",
+        f"{len(st.session_state.get('simulation_context', '').strip())} chars",
     )
 
     st.markdown("### Participants")
+    st.caption(
+        "Configure agent roles side-by-side to keep context visible while editing personas."
+    )
     control_cols = st.columns(2)
     with control_cols[0]:
         add_participant = st.button(
@@ -384,33 +402,57 @@ def render_simulation_page() -> None:
         st.rerun()
 
     current_participants: list[dict[str, str]] = []
-    for index, participant in enumerate(st.session_state.simulation_participants):
-        role_key = f"simulation_role_{index}"
-        persona_key = f"simulation_persona_{index}"
+    columns_per_row = 2 if len(st.session_state.simulation_participants) > 1 else 1
+    for row_start in range(0, len(st.session_state.simulation_participants), columns_per_row):
+        row_cols = st.columns(columns_per_row)
+        for offset, col in enumerate(row_cols):
+            index = row_start + offset
+            if index >= len(st.session_state.simulation_participants):
+                continue
 
-        if role_key not in st.session_state:
-            st.session_state[role_key] = participant["role"]
-        if persona_key not in st.session_state:
-            st.session_state[persona_key] = participant["persona"]
+            participant = st.session_state.simulation_participants[index]
+            role_key = f"simulation_role_{index}"
+            persona_key = f"simulation_persona_{index}"
 
-        st.markdown(f"**Participant {index + 1}**")
-        role_value = st.text_input(
-            "Role / title",
-            key=role_key,
-            help="How the agent should be referenced during the simulation.",
-        )
-        persona_value = st.text_area(
-            "Persona / background",
-            key=persona_key,
-            height=80,
-            help="Optional background context, expertise, or motivations.",
-        )
-        current_participants.append({"role": role_value, "persona": persona_value})
-        st.divider()
+            if role_key not in st.session_state:
+                st.session_state[role_key] = participant["role"]
+            if persona_key not in st.session_state:
+                st.session_state[persona_key] = participant["persona"]
+
+            with col:
+                st.markdown(f"#### Agent {index + 1}")
+                role_value = st.text_input(
+                    "Role / title",
+                    key=role_key,
+                    help="How the agent should be referenced during the simulation.",
+                    placeholder="e.g. Product Strategist",
+                )
+                persona_value = st.text_area(
+                    "Persona / background",
+                    key=persona_key,
+                    height=120,
+                    help="Optional background context, expertise, or motivations.",
+                    placeholder="Summarize expertise, goals, or constraints...",
+                )
+                st.caption(
+                    "Tip: concise personas help the model stay focused without overwhelming the prompt."
+                )
+
+            current_participants.append({"role": role_value, "persona": persona_value})
 
     st.session_state.simulation_participants = current_participants
 
-    run_simulation = st.button("Run simulation", use_container_width=True, key="simulation_run_button")
+    action_cols = st.columns((3, 1))
+    with action_cols[0]:
+        st.caption(
+            "Once configured, launch the exchange to preview the transcript and knowledge graph."
+        )
+    with action_cols[1]:
+        run_simulation = st.button(
+            "Run simulation",
+            use_container_width=True,
+            key="simulation_run_button",
+        )
 
     if run_simulation:
         participants_payload: list[dict[str, str | None]] = []
