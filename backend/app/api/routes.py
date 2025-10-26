@@ -12,8 +12,15 @@ from ..models.chat import (
     ConsolidateResponse,
     GraphSnapshot,
 )
+from ..models.simulation import (
+    SimulationCommitRequest,
+    SimulationCommitResponse,
+    SimulationRequest,
+    SimulationResponse,
+)
 from ..services.memory import GraphMemoryService, generate_summary
 from ..services.ollama import OllamaClient
+from ..services.simulation import run_simulation
 
 router = APIRouter()
 
@@ -119,3 +126,42 @@ async def clear_graph(
 
     await memory_service.clear_graph()
     return {"status": "graph cleared"}
+
+
+@router.post("/simulation/run", response_model=SimulationResponse, tags=["simulation"])
+async def simulation_run(
+    payload: SimulationRequest,
+    ollama_client: OllamaClient = Depends(get_ollama_client),
+) -> SimulationResponse:
+    """Run a GPT-to-GPT conversation without mutating stored knowledge."""
+
+    transcript, summary, graph = await run_simulation(payload, ollama_client)
+    return SimulationResponse(messages=transcript, summary=summary, graph=graph)
+
+
+@router.post(
+    "/simulation/commit",
+    response_model=SimulationCommitResponse,
+    tags=["simulation"],
+)
+async def simulation_commit(
+    payload: SimulationCommitRequest,
+    memory_service: GraphMemoryService = Depends(get_memory_service),
+) -> SimulationCommitResponse:
+    """Persist a previously simulated dialogue into the primary knowledge graph."""
+
+    sorted_messages = sorted(payload.messages, key=lambda msg: msg.timestamp)
+    for message in sorted_messages:
+        await memory_service.add_short_term_message(payload.target_session_id, message)
+    knowledge_id = await memory_service.consolidate_long_term(
+        session_id=payload.target_session_id,
+        summary=payload.summary,
+        notes=payload.notes,
+    )
+    updated_history = await memory_service.get_short_term_history(payload.target_session_id)
+    return SimulationCommitResponse(
+        session_id=payload.target_session_id,
+        knowledge_id=knowledge_id,
+        summary=payload.summary,
+        short_term_snapshot=updated_history,
+    )
