@@ -109,7 +109,13 @@ The backend exposes a FastAPI app at `/api` and depends on running Neo4j + Ollam
 - The Streamlit UI keeps session state for chat history, graph data, and live metrics. Messages are rendered via `st.chat_message`, and the chat input is kept outside tab layouts to comply with Streamlit constraints.
 - Graph rendering uses PyVis, exposing node metadata tooltips and providing refresh / reset controls inside the “Knowledge graph” tab.
 - Operators can add optional notes during consolidation; successful summaries are surfaced back in the UI before the graph refreshes.
-- A sidebar toggle separates the live user ↔ GPT conversation workspace from the GPT ↔ GPT simulation lab, where operators configure agent personas, enqueue automated discussions, poll for their completion, inspect the temporary graph, and merge results into existing sessions on demand.
+- A sidebar toggle separates the live user ↔ GPT conversation workspace from the GPT ↔ GPT simulation lab, where operators configure agent personas, enqueue automated discussions, poll for their completion via `_await_simulation`, inspect the temporary graph, and merge results into existing sessions on demand.
+
+### Known limitations & UX observations
+
+- **Simulation layout scaling** – each additional simulated participant inserts another pair of `st.text_input`/`st.text_area` widgets vertically. With four or five agents the page requires substantial scrolling, especially on shorter displays. No collapsible grouping or multi-column layout currently mitigates the vertical sprawl.
+- **Blocking simulation feedback** – `_await_simulation` polls until the backend reports completion and then renders the full transcript, summary, and graph in one batch. Intermediate turns are not surfaced, turn numbers are absent, and no incremental graph snapshots appear, so operators cannot monitor progress nor identify which turn caused a stall without inspecting backend logs.
+- **Graph refresh timing** – the chat workflow reloads the full graph after every message and after consolidations. Large graphs may therefore lengthen response times because the UI has no caching or delta updates beyond Streamlit session state.
 
 ## Testing
 
