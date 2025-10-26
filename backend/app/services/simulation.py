@@ -197,9 +197,17 @@ class _SimulationJobState:
 class SimulationCoordinator:
     """Manage asynchronous execution and retrieval of simulation jobs."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, timeout_seconds: float | None = None) -> None:
+        """Initialize the coordinator.
+
+        Args:
+            timeout_seconds: Optional maximum duration allowed for a simulation job
+                before it is cancelled and marked as failed.
+        """
+
         self._jobs: Dict[str, _SimulationJobState] = {}
         self._lock = asyncio.Lock()
+        self._timeout_seconds = timeout_seconds
 
     async def start_simulation(
         self, request: SimulationRequest, ollama_client: OllamaClient
@@ -231,7 +239,24 @@ class SimulationCoordinator:
             state.status = SimulationJobStatus.RUNNING
 
         try:
-            transcript, summary, graph = await run_simulation(state.request, ollama_client)
+            simulation_coro = run_simulation(state.request, ollama_client)
+            if self._timeout_seconds is not None:
+                transcript, summary, graph = await asyncio.wait_for(
+                    simulation_coro, timeout=self._timeout_seconds
+                )
+            else:
+                transcript, summary, graph = await simulation_coro
+        except asyncio.TimeoutError:
+            async with self._lock:
+                state.status = SimulationJobStatus.FAILED
+                if self._timeout_seconds is not None:
+                    state.error = (
+                        "Simulation exceeded the maximum runtime of "
+                        f"{self._timeout_seconds} seconds."
+                    )
+                else:  # pragma: no cover - defensive fallback
+                    state.error = "Simulation exceeded the maximum runtime."
+            return
         except Exception as exc:  # pragma: no cover - defensive programming
             async with self._lock:
                 state.status = SimulationJobStatus.FAILED
