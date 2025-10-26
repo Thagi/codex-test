@@ -31,9 +31,12 @@ class Settings(BaseSettings):
     short_term_ttl_minutes: int = Field(
         default=60, description="Time-to-live for short-term memory nodes"
     )
-    simulation_timeout_seconds: int = Field(
-        default=120,
-        description="Maximum runtime allowed for GPT-to-GPT simulations",
+    simulation_timeout_seconds: Optional[int] = Field(
+        default=None,
+        description=(
+            "Optional maximum runtime allowed for GPT-to-GPT simulations; leave unset "
+            "to disable the guard"
+        ),
     )
     allow_origins: list[str] = Field(default_factory=lambda: ["*"], description="CORS origins")
     nginx_host: Optional[str] = Field(

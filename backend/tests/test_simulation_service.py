@@ -107,6 +107,44 @@ async def test_simulation_coordinator_executes_job(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_simulation_coordinator_allows_long_jobs_when_no_timeout(monkeypatch):
+    """Simulations should run to completion when no timeout is configured."""
+
+    request = SimulationRequest(
+        turns=1,
+        context="Debate grid-scale storage technologies.",
+        participants=[
+            SimulationParticipant(role="Engineer"),
+            SimulationParticipant(role="Strategist"),
+        ],
+    )
+
+    async def fake_summary(messages, _client):  # type: ignore[no-untyped-def]
+        return "Summary"
+
+    monkeypatch.setattr(simulation_service, "generate_summary", fake_summary)
+
+    class SlowButCompletes:
+        async def generate(self, prompt: str) -> str:  # pragma: no cover - stub behaviour
+            await anyio.sleep(0.05)
+            return "slow-response"
+
+    coordinator = simulation_service.SimulationCoordinator()
+    job = await coordinator.start_simulation(request, SlowButCompletes())
+
+    for _ in range(200):
+        job = await coordinator.get_job(job.job_id)
+        if job.status is SimulationJobStatus.COMPLETED:
+            break
+        await anyio.sleep(0.01)
+    else:  # pragma: no cover - defensive branch
+        pytest.fail("Simulation job did not complete without timeout guard")
+
+    assert job.result is not None
+    assert job.result.summary == "Summary"
+
+
+@pytest.mark.anyio
 async def test_simulation_coordinator_surfaces_errors():
     """Failures during generation should propagate to the job status."""
 
@@ -170,5 +208,42 @@ async def test_simulation_coordinator_times_out_long_jobs(monkeypatch):
     else:  # pragma: no cover - defensive branch
         pytest.fail("Simulation job did not time out")
 
+    assert job.error is not None
+    assert "exceeded" in job.error.lower()
+
+
+@pytest.mark.anyio
+async def test_simulation_coordinator_cancels_stalled_jobs(monkeypatch):
+    """Polling should cancel and fail jobs that exceed the timeout while running."""
+
+    request = SimulationRequest(
+        turns=1,
+        participants=[
+            SimulationParticipant(role="Scientist"),
+            SimulationParticipant(role="Strategist"),
+        ],
+    )
+
+    async def passthrough_wait_for(coro, timeout):  # type: ignore[no-untyped-def]
+        return await coro
+
+    async def fake_summary(messages, _client):  # type: ignore[no-untyped-def]
+        return "Summary"
+
+    monkeypatch.setattr(simulation_service.asyncio, "wait_for", passthrough_wait_for)
+    monkeypatch.setattr(simulation_service, "generate_summary", fake_summary)
+
+    class StallingOllamaClient:
+        async def generate(self, prompt: str) -> str:  # pragma: no cover - stub behaviour
+            await anyio.sleep(0.2)
+            return "slow-response"
+
+    coordinator = simulation_service.SimulationCoordinator(timeout_seconds=0.05)
+    job = await coordinator.start_simulation(request, StallingOllamaClient())
+
+    await anyio.sleep(0.1)
+    job = await coordinator.get_job(job.job_id)
+
+    assert job.status is SimulationJobStatus.FAILED
     assert job.error is not None
     assert "exceeded" in job.error.lower()

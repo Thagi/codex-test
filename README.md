@@ -41,7 +41,7 @@ Key variables:
 - `NEO4J_URI` defaults to `bolt://neo4j:7687`. The backend normalizes any `neo4j://` URI to `bolt://` to avoid routing-table errors with single-instance deployments.
 - `OLLAMA_BASE_URL` should point to your host runtime. Podman users can keep `http://host.containers.internal:11434`; Docker users typically need `http://host.docker.internal:11434`.
 - `NEO4J_USER` / `NEO4J_PASSWORD` must match the credentials supplied to the Neo4j container in `docker-compose.yml`.
-- `SIMULATION_TIMEOUT_SECONDS` caps how long GPT-to-GPT simulations may run before the backend cancels the job (default `120`). Increase it if your Ollama model needs more time per response.
+- `SIMULATION_TIMEOUT_SECONDS` caps how long GPT-to-GPT simulations may run before the backend cancels the job. Leave it unset (the default) to allow simulations to run to completion, or provide a value in seconds to enable the guardrail when needed.
 
 > **Neo4j password tip:** Neo4j 5+ blocks the default password `neo4j`. The example file uses `neo4j_dev_password`; update both `.env` and the compose file together when changing it.
 

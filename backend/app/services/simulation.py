@@ -167,6 +167,8 @@ async def run_simulation(
             prompt = _build_prompt(prompt_context, participant)
             try:
                 reply = await ollama_client.generate(prompt)
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:  # pragma: no cover - surface backend failure
                 raise SimulationError(
                     f"Failed to generate a reply for role '{participant.role}'."
@@ -175,6 +177,8 @@ async def run_simulation(
 
     try:
         summary = await generate_summary(transcript, ollama_client)
+    except asyncio.CancelledError:
+        raise
     except Exception as exc:  # pragma: no cover - surface backend failure
         raise SimulationError("Failed to summarize simulated conversation.") from exc
 
@@ -192,6 +196,7 @@ class _SimulationJobState:
     result: SimulationResponse | None = None
     error: str | None = None
     task: asyncio.Task[None] | None = field(default=None, repr=False)
+    started_at: float | None = None
 
 
 class SimulationCoordinator:
@@ -207,7 +212,9 @@ class SimulationCoordinator:
 
         self._jobs: Dict[str, _SimulationJobState] = {}
         self._lock = asyncio.Lock()
-        self._timeout_seconds = timeout_seconds
+        self._timeout_seconds = (
+            timeout_seconds if timeout_seconds and timeout_seconds > 0 else None
+        )
 
     async def start_simulation(
         self, request: SimulationRequest, ollama_client: OllamaClient
@@ -228,6 +235,7 @@ class SimulationCoordinator:
             state = self._jobs.get(job_id)
             if state is None:
                 raise KeyError(job_id)
+            self._apply_timeout_if_needed(state)
             return self._snapshot_job(state)
 
     async def _execute_job(
@@ -237,6 +245,7 @@ class SimulationCoordinator:
 
         async with self._lock:
             state.status = SimulationJobStatus.RUNNING
+            state.started_at = asyncio.get_running_loop().time()
 
         try:
             simulation_coro = run_simulation(state.request, ollama_client)
@@ -246,6 +255,15 @@ class SimulationCoordinator:
                 )
             else:
                 transcript, summary, graph = await simulation_coro
+        except asyncio.CancelledError:
+            async with self._lock:
+                if state.status is SimulationJobStatus.RUNNING:
+                    state.status = SimulationJobStatus.FAILED
+                    if state.error is None:
+                        state.error = "Simulation was cancelled."
+                state.task = None
+                state.started_at = None
+            return
         except asyncio.TimeoutError:
             async with self._lock:
                 state.status = SimulationJobStatus.FAILED
@@ -256,17 +274,23 @@ class SimulationCoordinator:
                     )
                 else:  # pragma: no cover - defensive fallback
                     state.error = "Simulation exceeded the maximum runtime."
+                state.task = None
+                state.started_at = None
             return
         except Exception as exc:  # pragma: no cover - defensive programming
             async with self._lock:
                 state.status = SimulationJobStatus.FAILED
                 state.error = str(exc)
+                state.task = None
+                state.started_at = None
             return
 
         result = SimulationResponse(messages=transcript, summary=summary, graph=graph)
         async with self._lock:
             state.status = SimulationJobStatus.COMPLETED
             state.result = result
+            state.task = None
+            state.started_at = None
 
     async def shutdown(self) -> None:
         """Cancel any in-flight jobs during application shutdown."""
@@ -292,3 +316,37 @@ class SimulationCoordinator:
             result=state.result,
             error=state.error,
         )
+
+    def _apply_timeout_if_needed(self, state: _SimulationJobState) -> None:
+        """Mark running jobs as failed if they have exceeded the timeout."""
+
+        if (
+            self._timeout_seconds is None
+            or state.status is not SimulationJobStatus.RUNNING
+            or state.started_at is None
+        ):
+            return
+
+        elapsed = asyncio.get_running_loop().time() - state.started_at
+        if elapsed <= self._timeout_seconds:
+            return
+
+        state.status = SimulationJobStatus.FAILED
+        state.error = (
+            "Simulation exceeded the maximum runtime of "
+            f"{self._timeout_seconds} seconds."
+        )
+        state.started_at = None
+        task = state.task
+        if task is not None and not task.done():
+            task.cancel()
+            task.add_done_callback(self._silence_task_result)
+        elif task is not None and task.done():
+            state.task = None
+
+    @staticmethod
+    def _silence_task_result(task: asyncio.Task[None]) -> None:
+        """Swallow task cancellation exceptions to avoid noisy logs."""
+
+        with suppress(asyncio.CancelledError, Exception):
+            task.result()
