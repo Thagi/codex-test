@@ -212,7 +212,9 @@ class SimulationCoordinator:
 
         self._jobs: Dict[str, _SimulationJobState] = {}
         self._lock = asyncio.Lock()
-        self._timeout_seconds = timeout_seconds
+        self._timeout_seconds = (
+            timeout_seconds if timeout_seconds and timeout_seconds > 0 else None
+        )
 
     async def start_simulation(
         self, request: SimulationRequest, ollama_client: OllamaClient

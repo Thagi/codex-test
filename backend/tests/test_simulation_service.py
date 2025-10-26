@@ -107,6 +107,44 @@ async def test_simulation_coordinator_executes_job(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_simulation_coordinator_allows_long_jobs_when_no_timeout(monkeypatch):
+    """Simulations should run to completion when no timeout is configured."""
+
+    request = SimulationRequest(
+        turns=1,
+        context="Debate grid-scale storage technologies.",
+        participants=[
+            SimulationParticipant(role="Engineer"),
+            SimulationParticipant(role="Strategist"),
+        ],
+    )
+
+    async def fake_summary(messages, _client):  # type: ignore[no-untyped-def]
+        return "Summary"
+
+    monkeypatch.setattr(simulation_service, "generate_summary", fake_summary)
+
+    class SlowButCompletes:
+        async def generate(self, prompt: str) -> str:  # pragma: no cover - stub behaviour
+            await anyio.sleep(0.05)
+            return "slow-response"
+
+    coordinator = simulation_service.SimulationCoordinator()
+    job = await coordinator.start_simulation(request, SlowButCompletes())
+
+    for _ in range(200):
+        job = await coordinator.get_job(job.job_id)
+        if job.status is SimulationJobStatus.COMPLETED:
+            break
+        await anyio.sleep(0.01)
+    else:  # pragma: no cover - defensive branch
+        pytest.fail("Simulation job did not complete without timeout guard")
+
+    assert job.result is not None
+    assert job.result.summary == "Summary"
+
+
+@pytest.mark.anyio
 async def test_simulation_coordinator_surfaces_errors():
     """Failures during generation should propagate to the job status."""
 
