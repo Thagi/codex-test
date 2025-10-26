@@ -18,6 +18,7 @@ A conversational assistant that persists memories in Neo4j and lets operators pr
 - **Operator-driven consolidation** – a Streamlit action calls `/api/memory/consolidate` to summarize recent dialogue into a `Knowledge` node, linking contributing messages for provenance.
 - **Graph insight** – `/api/graph` exposes all nodes and edges so the front-end can render the knowledge graph with PyVis.
 - **Resilient storage** – when Neo4j is unreachable the memory service falls back to an in-process cache, allowing conversations to continue and graph visualisation to work with synthetic nodes until connectivity returns.
+- **Agent simulations** – `/api/simulation/run` now enqueues multi-agent GPT discussions and returns a job identifier; `/api/simulation/run/{job_id}` exposes progress and results so operators can review the proposed graph before opting into `/api/simulation/commit`.
 
 ## Getting started
 
@@ -96,6 +97,7 @@ The backend exposes a FastAPI app at `/api` and depends on running Neo4j + Ollam
 
 - **Configuration** – `backend/app/core/config.py` reads environment variables via Pydantic settings and caches a singleton instance per process.
 - **Service wiring** – dependency helpers in `backend/app/api/routes.py` create singletons for the `GraphMemoryService` and `OllamaClient`, ensuring connections are shared for the process lifetime.
+- **Simulation tooling** – `backend/app/services/simulation.py` assembles prompts for each agent, produces a graph snapshot of the proposed dialogue, and now manages asynchronous jobs so long-running simulations surface progress and errors without tripping HTTP timeouts.
 - **Fallback behaviour** – the memory service stores recent messages in Neo4j and mirrors them in a TTL-based in-memory list when the database is unreachable, enabling uninterrupted chat sessions.
 - **Graph export** – `/api/graph` returns serialised nodes/edges by walking the Neo4j result or the fallback cache, preserving metadata for the front-end visualisation.
 
@@ -104,6 +106,7 @@ The backend exposes a FastAPI app at `/api` and depends on running Neo4j + Ollam
 - The Streamlit UI keeps session state for chat history, graph data, and live metrics. Messages are rendered via `st.chat_message`, and the chat input is kept outside tab layouts to comply with Streamlit constraints.
 - Graph rendering uses PyVis, exposing node metadata tooltips and providing refresh / reset controls inside the “Knowledge graph” tab.
 - Operators can add optional notes during consolidation; successful summaries are surfaced back in the UI before the graph refreshes.
+- A sidebar toggle separates the live user ↔ GPT conversation workspace from the GPT ↔ GPT simulation lab, where operators configure agent personas, enqueue automated discussions, poll for their completion, inspect the temporary graph, and merge results into existing sessions on demand.
 
 ## Testing
 

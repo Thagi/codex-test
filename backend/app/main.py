@@ -6,7 +6,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api.routes import get_memory_service, get_ollama_client, router
+from .api.routes import (
+    get_memory_service,
+    get_ollama_client,
+    get_simulation_coordinator,
+    router,
+)
 from .core.config import get_settings
 
 
@@ -17,9 +22,11 @@ async def lifespan(app: FastAPI):
     # Create singleton instances eagerly
     get_memory_service()
     get_ollama_client()
+    get_simulation_coordinator()
     yield
     await get_memory_service().close()
     await get_ollama_client().close()
+    await get_simulation_coordinator().shutdown()
 
 
 settings = get_settings()

@@ -12,8 +12,16 @@ from ..models.chat import (
     ConsolidateResponse,
     GraphSnapshot,
 )
+from ..models.simulation import (
+    SimulationCommitRequest,
+    SimulationCommitResponse,
+    SimulationJob,
+    SimulationRequest,
+    SimulationStartResponse,
+)
 from ..services.memory import GraphMemoryService, generate_summary
 from ..services.ollama import OllamaClient
+from ..services.simulation import SimulationCoordinator
 
 router = APIRouter()
 
@@ -42,6 +50,14 @@ def get_ollama_client() -> OllamaClient:
             model=settings.ollama_model,
         )
     return get_ollama_client._instance  # type: ignore[attr-defined]
+
+
+def get_simulation_coordinator() -> SimulationCoordinator:
+    """Dependency returning the simulation coordinator singleton."""
+
+    if not hasattr(get_simulation_coordinator, "_instance"):
+        get_simulation_coordinator._instance = SimulationCoordinator()  # type: ignore[attr-defined]
+    return get_simulation_coordinator._instance  # type: ignore[attr-defined]
 
 
 @router.get("/health", tags=["system"])
@@ -119,3 +135,58 @@ async def clear_graph(
 
     await memory_service.clear_graph()
     return {"status": "graph cleared"}
+
+
+@router.post("/simulation/run", response_model=SimulationStartResponse, tags=["simulation"])
+async def simulation_run(
+    payload: SimulationRequest,
+    coordinator: SimulationCoordinator = Depends(get_simulation_coordinator),
+    ollama_client: OllamaClient = Depends(get_ollama_client),
+) -> SimulationStartResponse:
+    """Enqueue a GPT-to-GPT conversation without mutating stored knowledge."""
+
+    job = await coordinator.start_simulation(payload, ollama_client)
+    return SimulationStartResponse(job_id=job.job_id, status=job.status)
+
+
+@router.get(
+    "/simulation/run/{job_id}", response_model=SimulationJob, tags=["simulation"]
+)
+async def simulation_status(
+    job_id: str,
+    coordinator: SimulationCoordinator = Depends(get_simulation_coordinator),
+) -> SimulationJob:
+    """Return the current status (and result, if available) for a simulation job."""
+
+    try:
+        return await coordinator.get_job(job_id)
+    except KeyError as exc:  # pragma: no cover - defensive branch
+        raise HTTPException(status_code=404, detail=f"Simulation job {job_id} not found") from exc
+
+
+@router.post(
+    "/simulation/commit",
+    response_model=SimulationCommitResponse,
+    tags=["simulation"],
+)
+async def simulation_commit(
+    payload: SimulationCommitRequest,
+    memory_service: GraphMemoryService = Depends(get_memory_service),
+) -> SimulationCommitResponse:
+    """Persist a previously simulated dialogue into the primary knowledge graph."""
+
+    sorted_messages = sorted(payload.messages, key=lambda msg: msg.timestamp)
+    for message in sorted_messages:
+        await memory_service.add_short_term_message(payload.target_session_id, message)
+    knowledge_id = await memory_service.consolidate_long_term(
+        session_id=payload.target_session_id,
+        summary=payload.summary,
+        notes=payload.notes,
+    )
+    updated_history = await memory_service.get_short_term_history(payload.target_session_id)
+    return SimulationCommitResponse(
+        session_id=payload.target_session_id,
+        knowledge_id=knowledge_id,
+        summary=payload.summary,
+        short_term_snapshot=updated_history,
+    )
