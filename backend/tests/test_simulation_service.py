@@ -135,3 +135,40 @@ async def test_simulation_coordinator_surfaces_errors():
 
     assert job.error is not None
     assert "Engineer" in job.error
+
+
+@pytest.mark.anyio
+async def test_simulation_coordinator_times_out_long_jobs(monkeypatch):
+    """Jobs should fail cleanly when they exceed the configured timeout."""
+
+    request = SimulationRequest(
+        turns=1,
+        participants=[
+            SimulationParticipant(role="Scientist"),
+            SimulationParticipant(role="Strategist"),
+        ],
+    )
+
+    async def fake_summary(messages, _client):  # type: ignore[no-untyped-def]
+        return "Summary"
+
+    monkeypatch.setattr(simulation_service, "generate_summary", fake_summary)
+
+    class SlowOllamaClient:
+        async def generate(self, prompt: str) -> str:  # pragma: no cover - stub behaviour
+            await anyio.sleep(0.2)
+            return "slow-response"
+
+    coordinator = simulation_service.SimulationCoordinator(timeout_seconds=0.05)
+    job = await coordinator.start_simulation(request, SlowOllamaClient())
+
+    for _ in range(100):
+        job = await coordinator.get_job(job.job_id)
+        if job.status is SimulationJobStatus.FAILED:
+            break
+        await anyio.sleep(0.01)
+    else:  # pragma: no cover - defensive branch
+        pytest.fail("Simulation job did not time out")
+
+    assert job.error is not None
+    assert "exceeded" in job.error.lower()

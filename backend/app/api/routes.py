@@ -55,8 +55,11 @@ def get_ollama_client() -> OllamaClient:
 def get_simulation_coordinator() -> SimulationCoordinator:
     """Dependency returning the simulation coordinator singleton."""
 
+    settings = get_settings()
     if not hasattr(get_simulation_coordinator, "_instance"):
-        get_simulation_coordinator._instance = SimulationCoordinator()  # type: ignore[attr-defined]
+        get_simulation_coordinator._instance = SimulationCoordinator(  # type: ignore[attr-defined]
+            timeout_seconds=settings.simulation_timeout_seconds,
+        )
     return get_simulation_coordinator._instance  # type: ignore[attr-defined]
 
 
