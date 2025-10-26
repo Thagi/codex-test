@@ -31,6 +31,27 @@ class Settings(BaseSettings):
     short_term_ttl_minutes: int = Field(
         default=60, description="Time-to-live for short-term memory nodes"
     )
+    simulation_timeout_seconds: Optional[int] = Field(
+        default=None,
+        description=(
+            "Optional maximum runtime allowed for GPT-to-GPT simulations; leave unset "
+            "to disable the guard"
+        ),
+    )
+    simulation_max_tokens_per_message: Optional[int] = Field(
+        default=512,
+        description=(
+            "Optional upper bound for tokens generated per simulated reply and summary; "
+            "set to 0 to disable the limit."
+        ),
+    )
+    simulation_generation_timeout_seconds: Optional[int] = Field(
+        default=60,
+        description=(
+            "Optional timeout applied to each Ollama request during simulations; "
+            "set to 0 to disable the per-call guard."
+        ),
+    )
     allow_origins: list[str] = Field(default_factory=lambda: ["*"], description="CORS origins")
     nginx_host: Optional[str] = Field(
         default=None, description="Optional upstream host for Nginx health checks"
