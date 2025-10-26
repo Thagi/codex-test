@@ -4,7 +4,8 @@ from __future__ import annotations
 import json
 import os
 import time
-from typing import Any, Dict, List
+from importlib import resources
+from typing import Any, Dict
 
 import requests
 import streamlit as st
@@ -98,6 +99,9 @@ def _commit_simulation(payload: Dict[str, Any]) -> Dict[str, Any]:
     return response.json()
 
 
+_PYVIS_UTILS_SNIPPET: str | None = None
+
+
 def _render_graph(graph_data: dict) -> None:
     network = Network(height="500px", width="100%", bgcolor="#ffffff", directed=True)
     for node in graph_data.get("nodes", []):
@@ -115,6 +119,21 @@ def _render_graph(graph_data: dict) -> None:
         )
     network.repulsion(node_distance=200, spring_length=200)
     html = network.generate_html()
+
+    global _PYVIS_UTILS_SNIPPET
+    if _PYVIS_UTILS_SNIPPET is None:
+        try:
+            utils_path = resources.files("pyvis").joinpath("templates/lib/bindings/utils.js")
+            _PYVIS_UTILS_SNIPPET = utils_path.read_text(encoding="utf-8")
+        except (FileNotFoundError, ModuleNotFoundError):
+            _PYVIS_UTILS_SNIPPET = ""
+
+    if _PYVIS_UTILS_SNIPPET:
+        html = html.replace(
+            '<script src="lib/bindings/utils.js"></script>',
+            f"<script>{_PYVIS_UTILS_SNIPPET}</script>",
+        )
+
     st.components.v1.html(html, height=520)
 
 
@@ -310,66 +329,107 @@ def render_simulation_page() -> None:
     if "simulation_result" not in st.session_state:
         st.session_state.simulation_result = None
 
-    with st.form("simulation_form"):
-        context = st.text_area(
-            "Scenario / topic",
-            placeholder="Outline the theme, goal, or problem the agents should discuss...",
-            key="simulation_context",
+    min_participants = 2
+    max_participants = 5
+    if "simulation_participants" not in st.session_state:
+        st.session_state.simulation_participants = [
+            {"role": "Agent 1", "persona": ""},
+            {"role": "Agent 2", "persona": ""},
+        ]
+
+    context = st.text_area(
+        "Scenario / topic",
+        placeholder="Outline the theme, goal, or problem the agents should discuss...",
+        key="simulation_context",
+    )
+    turns = st.slider(
+        "Number of turns",
+        min_value=1,
+        max_value=10,
+        value=st.session_state.get("simulation_turns", 3),
+        key="simulation_turns",
+    )
+
+    st.markdown("### Participants")
+    control_cols = st.columns(2)
+    with control_cols[0]:
+        add_participant = st.button(
+            "Add participant",
+            use_container_width=True,
+            disabled=len(st.session_state.simulation_participants) >= max_participants,
+            key="simulation_add_participant",
         )
-        turns = st.slider(
-            "Number of turns",
-            min_value=1,
-            max_value=10,
-            value=st.session_state.get("simulation_turns", 3),
-            key="simulation_turns",
-        )
-        participant_count = st.number_input(
-            "Number of GPT participants",
-            min_value=2,
-            max_value=5,
-            value=st.session_state.get("simulation_participant_count", 2),
-            step=1,
-            key="simulation_participant_count",
+    with control_cols[1]:
+        remove_participant = st.button(
+            "Remove last participant",
+            use_container_width=True,
+            disabled=len(st.session_state.simulation_participants) <= min_participants,
+            key="simulation_remove_participant",
         )
 
-        participants_config: List[Dict[str, str]] = []
-        for index in range(int(participant_count)):
-            role_key = f"simulation_role_{index}"
-            persona_key = f"simulation_persona_{index}"
-            default_role = st.session_state.get(role_key, f"Agent {index + 1}")
-            default_persona = st.session_state.get(persona_key, "")
-            st.markdown(f"**Participant {index + 1}**")
-            role = st.text_input(
-                "Role / title",
-                value=default_role,
-                key=role_key,
-                help="How the agent should be referenced during the simulation.",
-            )
-            persona = st.text_area(
-                "Persona / background",
-                value=default_persona,
-                key=persona_key,
-                height=80,
-                help="Optional background context, expertise, or motivations.",
-            )
-            participants_config.append({"role": role, "persona": persona})
-            st.divider()
+    if add_participant:
+        new_index = len(st.session_state.simulation_participants)
+        st.session_state.simulation_participants.append(
+            {"role": f"Agent {new_index + 1}", "persona": ""}
+        )
+        st.session_state[f"simulation_role_{new_index}"] = f"Agent {new_index + 1}"
+        st.session_state[f"simulation_persona_{new_index}"] = ""
+        st.rerun()
 
-        submitted = st.form_submit_button("Run simulation", use_container_width=True)
+    if remove_participant:
+        removed_index = len(st.session_state.simulation_participants) - 1
+        st.session_state.simulation_participants.pop()
+        st.session_state.pop(f"simulation_role_{removed_index}", None)
+        st.session_state.pop(f"simulation_persona_{removed_index}", None)
+        st.rerun()
 
-    if submitted:
-        participants_payload = []
-        for participant in participants_config:
+    current_participants: list[dict[str, str]] = []
+    for index, participant in enumerate(st.session_state.simulation_participants):
+        role_key = f"simulation_role_{index}"
+        persona_key = f"simulation_persona_{index}"
+
+        if role_key not in st.session_state:
+            st.session_state[role_key] = participant["role"]
+        if persona_key not in st.session_state:
+            st.session_state[persona_key] = participant["persona"]
+
+        st.markdown(f"**Participant {index + 1}**")
+        role_value = st.text_input(
+            "Role / title",
+            key=role_key,
+            help="How the agent should be referenced during the simulation.",
+        )
+        persona_value = st.text_area(
+            "Persona / background",
+            key=persona_key,
+            height=80,
+            help="Optional background context, expertise, or motivations.",
+        )
+        current_participants.append({"role": role_value, "persona": persona_value})
+        st.divider()
+
+    st.session_state.simulation_participants = current_participants
+
+    run_simulation = st.button("Run simulation", use_container_width=True, key="simulation_run_button")
+
+    if run_simulation:
+        participants_payload: list[dict[str, str | None]] = []
+        normalized_participants: list[dict[str, str]] = []
+        for index, participant in enumerate(current_participants):
             role_name = participant["role"].strip()
-            if not role_name:
-                continue
             persona_text = participant["persona"].strip()
-            participants_payload.append(
-                {
-                    "role": role_name,
-                    "persona": persona_text or None,
-                }
-            )
+            effective_role = role_name or f"Agent {index + 1}"
+            normalized_participants.append({"role": effective_role, "persona": persona_text})
+            if effective_role:
+                participants_payload.append(
+                    {
+                        "role": effective_role,
+                        "persona": persona_text or None,
+                    }
+                )
+
+        st.session_state.simulation_participants = normalized_participants
+
         if len(participants_payload) < 2:
             st.error("Provide at least two participants with distinct roles before running the simulation.")
         else:
